@@ -7,53 +7,36 @@ import numpy as np
 import pandas as pd
 import yfinance as yf
 from datetime import datetime, timedelta
+from telegram import Bot
+from telegram.request import HTTPXRequest
 from playwright.async_api import async_playwright
 
 # ==========================================
-# ⚙️ ULTIMATE PRO BOT CONFIGURATION
+# ⚙️ ULTIMATE 4-STEP MTG & LIVE CHART BOT
 # ==========================================
 TELEGRAM_BOT_TOKEN = "8758950547:AAFRBa1f31fZ0lJciyI05mcoCZYv16bf5hs"
 CHANNEL_CHAT_ID = "@Binary_Signals_Live_Malik"
 HISTORY_FILE = "trading_history.json"
 
-LIVE_PAIRS_MAP = {
-    "EURUSD": "EURUSD=X", "GBPUSD": "GBPUSD=X", "USDJPY": "USDJPY=X",
-    "USDCHF": "USDCHF=X", "USDCAD": "USDCAD=X", "AUDUSD": "AUDUSD=X", "NZDUSD": "NZDUSD=X",
-    "EURGBP": "EURGBP=X", "EURJPY": "EURJPY=X", "EURAUD": "EURAUD=X",
-    "EURCAD": "EURCAD=X", "EURNZD": "EURNZD=X", "EURCHF": "EURCHF=X",
-    "GBPJPY": "GBPJPY=X", "GBPAUD": "GBPAUD=X", "GBPCAD": "GBPCAD=X",
-    "GBPCHF": "GBPCHF=X", "GBPNZD": "GBPNZD=X", "AUDJPY": "AUDJPY=X",
-    "AUDCAD": "AUDCAD=X", "AUDNZD": "AUDNZD=X", "CADJPY": "CADJPY=X",
-    "CHFJPY": "CHFJPY=X", "NZDJPY": "NZDJPY=X", "NZDCAD": "NZDCAD=X"
+# Correlation avoid karne ke liye 4 mukhtalif pairs
+ACTIVE_PAIRS_POOL = {
+    "EURUSD": "EURUSD=X", "USDJPY": "USDJPY=X", 
+    "GBPUSD": "GBPUSD=X", "AUDCAD": "AUDCAD=X"
 }
 
-session_stats = {"total": 0, "wins": 0, "losses": 0, "consecutive_losses": 0}
+# 4-Step MTG Amounts ($2 start for $200 account)
+MTG_AMOUNTS = [2.0, 4.0, 9.0, 20.0, 45.0]
+
+session_stats = {"total": 0, "wins": 0, "losses": 0, "net_profit": 0.0}
 signals_in_session = 0
-is_mtg_pending = False
-is_news_break_active = False
 
-# --- NEWS FILTER SYSTEM ---
-def check_forex_news_events():
-    try:
-        url = "https://nfs.faireconomy.media/ff_calendar_thisweek.json"
-        response = requests.get(url, timeout=10)
-        if response.status_code == 200:
-            events = response.json()
-            now_utc = datetime.utcnow()
-            
-            for event in events:
-                if event.get("impact") == "High":
-                    date_str = event.get("date")
-                    if date_str:
-                        event_time = datetime.strptime(date_str[:19], "%Y-%m-%dT%H:%M:%S")
-                        time_diff = (event_time - now_utc).total_seconds() / 60
-                        if -5 <= time_diff <= 15:
-                            return True, event.get("title", "High Impact News"), event.get("country", "USD")
-    except Exception as e:
-        print(f"News Check Error: {e}")
-    return False, "", ""
+# Har pair ka alag state track hoga (Step & Direction)
+pair_states = {pair: {"step": 0, "last_direction": None} for pair in ACTIVE_PAIRS_POOL.keys()}
 
-# --- DATABASE FUNCTIONS ---
+# Telegram Connection Timeout Fix
+custom_request = HTTPXRequest(read_timeout=60, write_timeout=60, connect_timeout=60)
+bot = Bot(token=TELEGRAM_BOT_TOKEN, request=custom_request)
+
 def load_history():
     if os.path.exists(HISTORY_FILE):
         try:
@@ -63,58 +46,60 @@ def load_history():
             pass
     return []
 
-def save_trade_to_db(is_win):
+def save_trade_to_db(is_win, amount):
     history = load_history()
     trade_record = {
         "timestamp": time.time(),
         "date": datetime.utcnow().strftime("%Y-%m-%d"),
-        "result": "WIN" if is_win else "LOSS"
+        "result": "WIN" if is_win else "LOSS",
+        "amount": amount
     }
     history.append(trade_record)
     try:
         with open(HISTORY_FILE, "w") as f:
             json.dump(history, f)
-    except Exception as e:
-        print(f"DB Save Error: {e}")
+    except:
+        pass
 
 def get_stats_by_period(period_type):
     history = load_history()
     now = datetime.utcnow()
-    filtered_wins, filtered_losses = 0, 0
-    
+    filtered_wins, filtered_losses, total_profit = 0, 0, 0.0
     for trade in history:
         try:
             trade_time = datetime.strptime(trade["date"], "%Y-%m-%d")
+            match = False
             if period_type == "day":
-                if trade["date"] == now.strftime("%Y-%m-%d"):
-                    if trade["result"] == "WIN": filtered_wins += 1
-                    else: filtered_losses += 1
+                if trade["date"] == now.strftime("%Y-%m-%d"): match = True
             elif period_type == "week":
-                if (now - trade_time).days <= 7:
-                    if trade["result"] == "WIN": filtered_wins += 1
-                    else: filtered_losses += 1
+                if (now - trade_time).days <= 7: match = True
             elif period_type == "month":
-                if (now - trade_time).days <= 30:
-                    if trade["result"] == "WIN": filtered_wins += 1
-                    else: filtered_losses += 1
+                if (now - trade_time).days <= 30: match = True
+                
+            if match:
+                amt = trade.get("amount", 2.0)
+                if trade["result"] == "WIN":
+                    filtered_wins += 1
+                    total_profit += (amt * 0.85)
+                else:
+                    filtered_losses += 1
+                    total_profit -= amt
         except:
             continue
-                
     total = filtered_wins + filtered_losses
     accuracy = (filtered_wins / total * 100) if total > 0 else 0.0
-    return total, filtered_wins, filtered_losses, accuracy
+    return total, filtered_wins, filtered_losses, accuracy, total_profit
 
-def is_london_newyork_session():
+def is_allowed_time_session():
     now_utc = datetime.utcnow()
     pk_time = now_utc + timedelta(hours=5)
     current_hour = pk_time.hour
-    if 12 <= current_hour < 22:
+    if 10 <= current_hour < 21:
         return True
     return False
 
-def send_telegram_message_with_result_buttons(text, pair):
-    url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
-    inline_keyboard = {
+def get_inline_keyboard():
+    return {
         "inline_keyboard": [
             [
                 {"text": "📊 Day Results", "callback_data": "res_day"},
@@ -122,60 +107,81 @@ def send_telegram_message_with_result_buttons(text, pair):
             ],
             [
                 {"text": "🗓️ Month Results", "callback_data": "res_month"},
+                {"text": "📋 Active Pairs Status", "callback_data": "res_pairs"}
+            ],
+            [
                 {"text": "👑 Admin Portal", "callback_data": "res_admin"}
             ]
         ]
     }
+
+async def send_telegram_message_with_result_buttons(text):
+    url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
     payload = {
         'chat_id': CHANNEL_CHAT_ID, 
         'text': text, 
         'parse_mode': 'Markdown',
-        'reply_markup': inline_keyboard
+        'reply_markup': json.dumps(get_inline_keyboard())
     }
-    try:
-        requests.post(url, json=payload, timeout=20)
-    except Exception as e:
-        print(f"Telegram Message Error: {e}")
-
-def send_telegram_simple_message(text):
-    url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
-    payload = {'chat_id': CHANNEL_CHAT_ID, 'text': text, 'parse_mode': 'Markdown'}
     try:
         requests.post(url, data=payload, timeout=20)
-    except Exception as e:
-        print(f"Telegram Message Error: {e}")
+    except:
+        pass
 
-def send_telegram_photo_with_result_buttons(photo_path, caption, pair):
-    url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendPhoto"
-    inline_keyboard = {
-        "inline_keyboard": [
-            [
-                {"text": "📊 Day Results", "callback_data": "res_day"},
-                {"text": "📅 Week Results", "callback_data": "res_week"}
-            ],
-            [
-                {"text": "🗓️ Month Results", "callback_data": "res_month"},
-                {"text": "👑 Admin Portal", "callback_data": "res_admin"}
-            ]
-        ]
-    }
+async def send_telegram_photo_with_caption(photo_path, caption):
     for attempt in range(3):
         try:
             if os.path.exists(photo_path) and os.path.getsize(photo_path) > 0:
                 with open(photo_path, 'rb') as photo:
-                    payload = {
-                        'chat_id': CHANNEL_CHAT_ID, 
-                        'caption': caption, 
-                        'parse_mode': 'Markdown',
-                        'reply_markup': str(inline_keyboard).replace("'", '"')
-                    }
-                    files = {'photo': photo}
-                    response = requests.post(url, data=payload, files=files, timeout=45)
-                    if response.status_code == 200:
-                        return True
-        except Exception:
-            time.sleep(1)
+                    await bot.send_photo(
+                        chat_id=CHANNEL_CHAT_ID, 
+                        photo=photo, 
+                        caption=caption, 
+                        parse_mode="Markdown",
+                        reply_markup=json.dumps(get_inline_keyboard())
+                    )
+                return True
+        except Exception as e:
+            print(f"Photo upload attempt {attempt+1} failed: {e}")
+            await asyncio.sleep(3)
     return False
+
+async def capture_live_chart(pair: str, output_path: str):
+    """TradingView se clean 1-min live chart screenshot leta hai"""
+    try:
+        async with async_playwright() as p:
+            browser = await p.chromium.launch(headless=True)
+            page = await browser.new_page(viewport={"width": 1280, "height": 720})
+            url = f"https://www.tradingview.com/chart/?symbol=FX:{pair}&interval=1"
+            await page.goto(url, wait_until="domcontentloaded", timeout=60000)
+            await asyncio.sleep(5)
+            await page.screenshot(path=output_path)
+            await browser.close()
+            return True
+    except Exception as e:
+        print(f"Chart capture error: {e}")
+        return False
+
+def get_all_pairs_status_text():
+    status_lines = ["📋 *4-STEP MTG MULTI-PAIR STATUS* 📋\n━━━━━━━━━━━━━━━━━━━━━━━━━"]
+    for pair, yf_symbol in ACTIVE_PAIRS_POOL.items():
+        try:
+            ticker = yf.Ticker(yf_symbol)
+            df = ticker.history(period="1d", interval="1m", auto_adjust=True, timeout=5)
+            if not df.empty and len(df) >= 10:
+                curr_price = float(df.iloc[-1]['Close'])
+                prev_price = float(df.iloc[-2]['Close'])
+                trend = "🟢 BULLISH" if curr_price > prev_price else "🔴 BEARISH"
+                step = pair_states[pair]["step"]
+                stake = MTG_AMOUNTS[step]
+                status_lines.append(f"• `#{pair}` ➔ {trend}\n  Price: `{curr_price:.5f}` | Step: `{step}` (Stake: `${stake}`)")
+            else:
+                status_lines.append(f"• `#{pair}` ➔ `Syncing...`")
+        except:
+            status_lines.append(f"• `#{pair}` ➔ `Checking...`")
+        
+    status_lines.append("━━━━━━━━━━━━━━━━━━━━━━━━━")
+    return "\n".join(status_lines)
 
 async def handle_telegram_callbacks():
     offset = 0
@@ -192,7 +198,6 @@ async def handle_telegram_callbacks():
                         callback_data = cq["data"]
                         query_id = cq["id"]
                         
-                        ans_text = ""
                         if callback_data == "res_admin":
                             ans_text = (
                                 "👑 *FATIMA ZESHAN FX - VIP PORTAL* 👑\n"
@@ -206,6 +211,8 @@ async def handle_telegram_callbacks():
                                 "📞 *Contact Number:* `0302-0753076`\n"
                                 "━━━━━━━━━━━━━━━━━━━━━━━━━"
                             )
+                        elif callback_data == "res_pairs":
+                            ans_text = get_all_pairs_status_text()
                         else:
                             period = "day"
                             title = "📊 TODAY'S RESULTS SUMMARY"
@@ -216,8 +223,8 @@ async def handle_telegram_callbacks():
                                 period = "month"
                                 title = "🗓️ LAST 30 DAYS RESULTS SUMMARY"
                                 
-                            total, wins, losses, acc = get_stats_by_period(period)
-                            
+                            total, wins, losses, acc, profit = get_stats_by_period(period)
+                            p_sign = "+" if profit >= 0 else ""
                             ans_text = (
                                 f"*{title}*\n"
                                 f"━━━━━━━━━━━━━━━━━━━\n"
@@ -225,222 +232,185 @@ async def handle_telegram_callbacks():
                                 f"✅ **Wins:** `{wins}`\n"
                                 f"❌ **Losses:** `{losses}`\n"
                                 f"📈 **Accuracy:** `{acc:.2f}%`\n"
+                                f"💰 **Net Profit:** `{p_sign}${profit:.2f}`\n"
                                 f"━━━━━━━━━━━━━━━━━━━"
                             )
                         
                         ans_url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/answerCallbackQuery"
                         requests.post(ans_url, json={"callback_query_id": query_id, "text": "Loading...", "show_alert": False})
-                        send_telegram_simple_message(ans_text)
-        except Exception as e:
-            print(f"Callback Listener Error: {e}")
-        await asyncio.sleep(2)
-
-async def capture_chart(pair: str, output_path: str):
-    async with async_playwright() as p:
-        browser = await p.chromium.launch(headless=True)
-        page = await browser.new_page(viewport={"width": 1200, "height": 750})
-        url = f"https://s.tradingview.com/widgetembed/?symbol=FX:{pair}&interval=5&hidesidetoolbar=1&symboledit=0&saveimage=0&toolbarbg=F1F3F6&studies=[]&theme=dark&style=1"
-        try:
-            await page.goto(url, wait_until="networkidle", timeout=30000)
-            await asyncio.sleep(2)
-            await page.screenshot(path=output_path, clip={"x": 0, "y": 0, "width": 1200, "height": 700})
+                        await send_telegram_message_with_result_buttons(ans_text)
         except:
             pass
-        finally:
-            await browser.close()
-
-def calculate_rsi(series, period=14):
-    delta = series.diff()
-    gain = (delta.where(delta > 0, 0)).rolling(window=period).mean()
-    loss = (-delta.where(delta < 0, 0)).rolling(window=period).mean()
-    rs = gain / loss
-    return 100 - (100 / (1 + rs))
+        await asyncio.sleep(2)
 
 def get_market_data(yf_symbol):
     try:
         ticker = yf.Ticker(yf_symbol)
-        df_5m = ticker.history(period="3d", interval="5m", auto_adjust=True, timeout=10)
-        df_1h = ticker.history(period="3d", interval="1h", auto_adjust=True, timeout=10)
-        
-        if not df_5m.empty and len(df_5m) >= 20:
-            df_5m['rsi'] = calculate_rsi(df_5m['Close'], 14)
-            candles = []
-            for i in range(-5, 0):
-                row = df_5m.iloc[i]
-                candles.append({
-                    'open': float(row['Open']), 'high': float(row['High']),
-                    'low': float(row['Low']), 'close': float(row['Close']),
-                    'rsi': float(row['rsi']) if not pd.isna(row['rsi']) else 50.0
-                })
-            
-            trend_1h = "NEUTRAL"
-            if not df_1h.empty and len(df_1h) >= 5:
-                ma_fast = df_1h['Close'].rolling(window=5).mean().iloc[-1]
-                ma_slow = df_1h['Close'].rolling(window=20).mean().iloc[-1]
-                if ma_fast > ma_slow: trend_1h = "BULLISH"
-                elif ma_fast < ma_slow: trend_1h = "BEARISH"
-            return candles, trend_1h
+        df_1m = ticker.history(period="1d", interval="1m", auto_adjust=True, timeout=10)
+        if not df_1m.empty and len(df_1m) >= 10:
+            return df_1m
     except:
         pass
-    return None, None
-
-def analyze_multi_strategies(candles, trend_1h, is_mtg):
-    if not candles or len(candles) < 2: return None
-    prev_candle, curr_candle = candles[-2], candles[-1]
-    entry_price = curr_candle['close']
-    curr_body = abs(curr_candle['close'] - curr_candle['open'])
-    curr_range = curr_candle['high'] - curr_candle['low']
-    if curr_range == 0: return None
-
-    rsi_val = curr_candle['rsi']
-    is_strong_body = curr_body >= (curr_range * 0.65)
-    
-    if curr_candle['close'] > curr_candle['open'] and is_strong_body:
-        if curr_candle['close'] > prev_candle['high'] and trend_1h == "BULLISH" and (40 <= rsi_val <= 65):
-            tag = "🔥 1-STEP HEAVY MTG (Breakout)" if is_mtg else "🎯 5M High Breakout"
-            return (tag, "CALL 🟢", f"{entry_price:.5f}", "💎 VIP 99% (MTG)" if is_mtg else "🔥 PRO 85%+", entry_price)
-
-    elif curr_candle['close'] < curr_candle['open'] and is_strong_body:
-        if curr_candle['close'] < prev_candle['low'] and trend_1h == "BEARISH" and (35 <= rsi_val <= 60):
-            tag = "🔥 1-STEP HEAVY MTG (Breakout)" if is_mtg else "🎯 5M Low Breakout"
-            return (tag, "PUT 🔻", f"{entry_price:.5f}", "💎 VIP 99% (MTG)" if is_mtg else "🔥 PRO 85%+", entry_price)
-
-    prev_body = abs(prev_candle['close'] - prev_candle['open'])
-    if curr_body > prev_body * 1.2:
-        if curr_candle['close'] > curr_candle['open'] and prev_candle['close'] < prev_candle['open'] and trend_1h == "BULLISH" and rsi_val < 65:
-            tag = "🔥 1-STEP HEAVY MTG (Bullish Engulfing)" if is_mtg else "🚀 Bullish Engulfing Pattern"
-            return (tag, "CALL 🟢", f"{entry_price:.5f}", "💎 VIP 99% (MTG)" if is_mtg else "🔥 PRO 88%+", entry_price)
-        elif curr_candle['close'] < curr_candle['open'] and prev_candle['close'] > prev_candle['open'] and trend_1h == "BEARISH" and rsi_val > 35:
-            tag = "🔥 1-STEP HEAVY MTG (Bearish Engulfing)" if is_mtg else "📉 Bearish Engulfing Pattern"
-            return (tag, "PUT 🔻", f"{entry_price:.5f}", "💎 VIP 99% (MTG)" if is_mtg else "🔥 PRO 88%+", entry_price)
-
-    upper_wick = curr_candle['high'] - max(curr_candle['open'], curr_candle['close'])
-    lower_wick = min(curr_candle['open'], curr_candle['close']) - curr_candle['low']
-    
-    if upper_wick > (curr_body * 2) and rsi_val >= 80:
-        tag = "🔥 1-STEP HEAVY MTG (Pin Bar Rejection)" if is_mtg else "🔻 Top Rejection Pin Bar"
-        return (tag, "PUT 🔻", f"{entry_price:.5f}", "💎 VIP 99% (MTG)" if is_mtg else "🔥 PRO 90%+", entry_price)
-    elif lower_wick > (curr_body * 2) and rsi_val <= 20:
-        tag = "🔥 1-STEP HEAVY MTG (Pin Bar Rejection)" if is_mtg else "🟢 Bottom Rejection Pin Bar"
-        return (tag, "CALL 🟢", f"{entry_price:.5f}", "💎 VIP 99% (MTG)" if is_mtg else "🔥 PRO 90%+", entry_price)
-
     return None
 
-async def process_signal(pair: str, yf_symbol: str, pattern: str, direction: str, entry_str: str, strength: str, entry_num: float, is_mtg: bool):
-    global session_stats, signals_in_session, is_mtg_pending
-    timestamp = int(time.time())
-    live_img, result_img = f"{pair}_live_{timestamp}.png", f"{pair}_result_{timestamp}.png"
+def analyze_pair(df_1m):
+    if df_1m is None or len(df_1m) < 15: return None
+    support_level = df_1m['Low'].tail(15).min()
+    resistance_level = df_1m['High'].tail(15).max()
     
-    await capture_chart(pair, live_img)
-    title = "⚡ 1-STEP HEAVY MTG ALERT" if is_mtg else "💎 FATIMA FOREX FX - PRO SESSION ALERT"
+    curr = df_1m.iloc[-1]
+    entry_price = float(curr['Close'])
+    
+    near_support = abs(entry_price - support_level) <= (resistance_level - support_level) * 0.35
+    near_resistance = abs(entry_price - resistance_level) <= (resistance_level - support_level) * 0.35
+    
+    is_green = curr['Close'] > curr['Open']
+    is_red = curr['Close'] < curr['Open']
+    
+    if near_support and is_green:
+        return "CALL 🟢", entry_price
+    elif near_resistance and is_red:
+        return "PUT 🔻", entry_price
+    return None
+
+async def execute_trade(pair, yf_symbol, direction):
+    global session_stats, signals_in_session, pair_states
+    
+    current_step = pair_states[pair]["step"]
+    current_stake = MTG_AMOUNTS[current_step]
+    
+    df_pre = get_market_data(yf_symbol)
+    if df_pre is None: return
+    entry_num = float(df_pre.iloc[-1]['Close'])
+    entry_str = f"{entry_num:.5f}"
+    
+    live_img = f"{pair}_live.png"
+    result_img = f"{pair}_result.png"
+    
+    # 1. Live Chart Screenshot capture karo
+    await capture_live_chart(pair, live_img)
+    
+    title = f"⚡ 4-STEP MTG (STEP {current_step}) | STAKE: ${current_stake}" if current_step > 0 else "💎 FATIMA FOREX FX - 1M SIGNAL ($2)"
     signal_msg = (
         f"**{title}**\n━━━━━━━━━━━━━━━━━━━━━━━━━\n"
-        f"📊 **Asset:** `#{pair}`\n⏳ **Timeframe:** `5 Minutes`\n"
-        f"🎯 **Pattern:** `{pattern}`\n📈 **Direction:** `{direction}`\n"
-        f"📍 **Entry:** `{entry_str}`\n💪 **Accuracy:** `{strength}`\n"
-        f"⏱️ **Expiry:** `Exact 2 Minutes`\n━━━━━━━━━━━━━━━━━━━━━━━━━"
+        f"📊 **Asset:** `#{pair}`\n⏳ **Timeframe:** `1 Minute`\n"
+        f"📈 **Direction:** `{direction}`\n"
+        f"📍 **Entry Price:** `{entry_str}`\n"
+        f"💰 **Stake Amount:** `${current_stake}`\n"
+        f"⏱️ **Expiry:** `Exact 1 Minute`\n━━━━━━━━━━━━━━━━━━━━━━━━━"
     )
     
     if os.path.exists(live_img):
-        send_telegram_photo_with_result_buttons(live_img, signal_msg, pair)
+        await send_telegram_photo_with_caption(live_img, signal_msg)
         try: os.remove(live_img)
         except: pass
     else:
-        send_telegram_message_with_result_buttons(signal_msg, pair)
-
-    await asyncio.sleep(120)
-    candles_after, _ = get_market_data(yf_symbol)
-    exit_num = candles_after[-1]['close'] if candles_after and len(candles_after) > 0 else entry_num
+        await send_telegram_message_with_result_buttons(signal_msg)
+        
+    # 2. 1 minute expiry ka wait
+    await asyncio.sleep(60)
+    
+    df_post = get_market_data(yf_symbol)
+    exit_num = float(df_post.iloc[-1]['Close']) if df_post is not None else entry_num
     exit_str = f"{exit_num:.5f}"
     
     is_win = True if ("CALL" in direction and exit_num > entry_num) or ("PUT" in direction and exit_num < entry_num) else False
+    
     session_stats["total"] += 1
     signals_in_session += 1
-    save_trade_to_db(is_win)
     
     if is_win:
         session_stats["wins"] += 1
-        session_stats["consecutive_losses"] = 0
-        is_mtg_pending = False
-        result_status = "✅ **WIN / ITM 🎯**"
+        profit_amt = current_stake * 0.85
+        session_stats["net_profit"] += profit_amt
+        save_trade_to_db(True, current_stake)
+        res_status = f"✅ **WIN / ITM 🎯 (+${profit_amt:.2f} Profit)**"
+        pair_states[pair]["step"] = 0
     else:
         session_stats["losses"] += 1
-        session_stats["consecutive_losses"] += 1
-        is_mtg_pending = True
-        result_status = "❌ **LOSS / OTM 🛑 (1-Step MTG Triggered)**"
-
-    await capture_chart(pair, result_img)
+        session_stats["net_profit"] -= current_stake
+        save_trade_to_db(False, current_stake)
+        current_step += 1
+        if current_step >= len(MTG_AMOUNTS):
+            res_status = f"❌ **MAX MTG REACHED! Resetting to $2...**"
+            pair_states[pair]["step"] = 0
+        else:
+            res_status = f"⚠️ **LOSS (-${current_stake}) ➔ MTG Step {current_step} (${MTG_AMOUNTS[current_step]})**"
+            pair_states[pair]["step"] = current_step
+            pair_states[pair]["last_direction"] = direction
+            
+    np_sign = "+" if session_stats["net_profit"] >= 0 else ""
     result_msg = (
         f"🏆 **FATIMA FOREX FX - RESULT** 🏆\n━━━━━━━━━━━━━━━━━━━━━━━━━\n"
         f"📊 **Asset:** `#{pair}`\n📍 **Entry:** `{entry_str}` | 🏁 **Exit:** `{exit_str}`\n"
-        f"✨ **Status:** {result_status}\n━━━━━━━━━━━━━━━━━━━━━━━━━\n"
-        f"📊 *Progress* ➔ Signal: `{signals_in_session}`/10 | Wins: `{session_stats['wins']}` | Losses: `{session_stats['losses']}`"
+        f"✨ **Status:** {res_status}\n━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+        f"📊 *Progress* ➔ Signals: `{signals_in_session}` | Wins: `{session_stats['wins']}` | Losses: `{session_stats['losses']}`\n"
+        f"💰 *Session Profit:* `{np_sign}${session_stats['net_profit']:.2f}`"
     )
     
+    # 3. Result par Live Chart ka screenshot bhejna
+    await capture_live_chart(pair, result_img)
     if os.path.exists(result_img):
-        send_telegram_photo_with_result_buttons(result_img, result_msg, pair)
+        await send_telegram_photo_with_caption(result_img, result_msg)
         try: os.remove(result_img)
         except: pass
     else:
-        send_telegram_message_with_result_buttons(result_msg, pair)
+        await send_telegram_message_with_result_buttons(result_msg)
 
-    if signals_in_session >= 10:
-        total_t, wins_t, losses_t = session_stats["total"], session_stats["wins"], session_stats["losses"]
-        accuracy = (wins_t / total_t * 100) if total_t > 0 else 0
-        summary_msg = (
-            f"🎯 **1 HOUR SESSION SUMMARY** 🎯\n━━━━━━━━━━━━━━━━━━━━━━━━━\n"
-            f"🎯 **Total:** `{signals_in_session}` | ✅ **Wins:** `{wins_t}` | ❌ **Losses:** `{losses_t}`\n"
-            f"📈 **Accuracy:** `{accuracy:.2f}%`\n━━━━━━━━━━━━━━━━━━━━━━━━━\n"
-            f"🛑 **Taking a 10 minutes break!**"
+    if signals_in_session >= 15:
+        tot, w, l = session_stats["total"], session_stats["wins"], session_stats["losses"]
+        acc = (w / tot * 100) if tot > 0 else 0
+        np_sign_sum = "+" if session_stats["net_profit"] >= 0 else ""
+        summary = (
+            f"🎯 **SESSION SUMMARY** 🎯\n━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+            f"🎯 **Total:** `{signals_in_session}` | ✅ **Wins:** `{w}` | ❌ **Losses:** `{l}`\n"
+            f"📈 **Accuracy:** `{acc:.2f}%`\n"
+            f"💰 **Total Net Profit:** `{np_sign_sum}${session_stats['net_profit']:.2f}`\n━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+            f"🛑 **Taking a 5 minutes break!**"
         )
-        send_telegram_simple_message(summary_msg)
+        await send_telegram_message_with_result_buttons(summary)
         signals_in_session = 0
-        session_stats = {"total": 0, "wins": 0, "losses": 0, "consecutive_losses": 0}
-        is_mtg_pending = False
-        await asyncio.sleep(600)
-        send_telegram_simple_message("🚀 **SESSION RESUMED!**")
+        session_stats = {"total": 0, "wins": 0, "losses": 0, "net_profit": 0.0}
+        await asyncio.sleep(300)
+        await send_telegram_message_with_result_buttons("🚀 **SESSION RESUMED!**")
 
 async def main():
-    global is_mtg_pending
-    print("Fatima Forex FX Bot Active with Callback-based Admin Portal & News Filter...")
+    print("Multi-Pair 4-Step MTG Bot Active with Live TradingView Charts...")
     asyncio.create_task(handle_telegram_callbacks())
     
     while True:
-        has_news, news_title, news_currency = check_forex_news_events()
-        if has_news:
-            news_alert_msg = (
-                f"🚨 **HIGH IMPACT NEWS BREAK ALERT** 🚨\n"
-                f"━━━━━━━━━━━━━━━━━━━━━━━━━\n"
-                f"⚠️ **Event:** `{news_title}`\n"
-                f"💱 **Currency:** `{news_currency}`\n"
-                f"🛑 **Bot Status:** Paused for safety (High Volatility Ahead).\n"
-                f"━━━━━━━━━━━━━━━━━━━━━━━━━"
-            )
-            print(f"News Alert Sent: {news_title}")
-            send_telegram_simple_message(news_alert_msg)
-            await asyncio.sleep(1800)
-            continue
-
-        if not is_london_newyork_session():
-            print(f"[{datetime.now().strftime('%H:%M:%S')}] Outside London/New York Session. Waiting...", end="\r")
-            await asyncio.sleep(60)
-            continue
-
-        signal_found = False
-        for pair, yf_symbol in LIVE_PAIRS_MAP.items():
-            print(f"Scanning Active Session -> {pair} [MTG: {is_mtg_pending}]                    ", end="\r")
-            candles, trend_1h = get_market_data(yf_symbol)
-            signal = analyze_multi_strategies(candles, trend_1h, is_mtg_pending)
-            
-            if signal:
-                pattern, direction, entry_str, strength, entry_num = signal
-                await process_signal(pair, yf_symbol, pattern, direction, entry_str, strength, entry_num, is_mtg_pending)
-                signal_found = True
-                await asyncio.sleep(300)
-                break  
+        try:
+            if not is_allowed_time_session():
+                await asyncio.sleep(60)
+                continue
                 
-        if not signal_found:
-            await asyncio.sleep(10)
+            signal_found = False
+            for pair, yf_symbol in ACTIVE_PAIRS_POOL.items():
+                df_1m = get_market_data(yf_symbol)
+                current_step = pair_states[pair]["step"]
+                
+                if current_step > 0:
+                    direction = pair_states[pair]["last_direction"]
+                    await execute_trade(pair, yf_symbol, direction)
+                    signal_found = True
+                    await asyncio.sleep(15)
+                    break
+                else:
+                    res = analyze_pair(df_1m)
+                    if res:
+                        direction, _ = res
+                        pair_states[pair]["last_direction"] = direction
+                        await execute_trade(pair, yf_symbol, direction)
+                        signal_found = True
+                        await asyncio.sleep(15)
+                        break
+                    
+            if not signal_found:
+                await asyncio.sleep(10)
+        except Exception as e:
+            print(f"Error: {e}")
+            await asyncio.sleep(15)
 
 if __name__ == "__main__":
     asyncio.run(main())
+
