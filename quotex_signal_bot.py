@@ -9,7 +9,7 @@ import yfinance as yf
 from datetime import datetime, timedelta
 
 # ==========================================
-# ⚙️ LIGHTWEIGHT PRO BOT CONFIGURATION
+# ⚙️ LIGHTWEIGHT PRO BOT CONFIGURATION (1M)
 # ==========================================
 TELEGRAM_BOT_TOKEN = "8758950547:AAFRBa1f31fZ0lJciyI05mcoCZYv16bf5hs"
 CHANNEL_CHAT_ID = "@Binary_Signals_Live_Malik"
@@ -204,14 +204,15 @@ def calculate_rsi(series, period=14):
 def get_market_data(yf_symbol):
     try:
         ticker = yf.Ticker(yf_symbol)
-        df_5m = ticker.history(period="3d", interval="5m", auto_adjust=True, timeout=10)
-        df_1h = ticker.history(period="3d", interval="1h", auto_adjust=True, timeout=10)
+        # Changed to 1-minute interval
+        df_1m = ticker.history(period="1d", interval="1m", auto_adjust=True, timeout=10)
+        df_1h = ticker.history(period="2d", interval="1h", auto_adjust=True, timeout=10)
         
-        if not df_5m.empty and len(df_5m) >= 25:
-            df_5m['rsi'] = calculate_rsi(df_5m['Close'], 14)
+        if not df_1m.empty and len(df_1m) >= 25:
+            df_1m['rsi'] = calculate_rsi(df_1m['Close'], 14)
             candles = []
             for i in range(-10, 0):
-                row = df_5m.iloc[i]
+                row = df_1m.iloc[i]
                 candles.append({
                     'open': float(row['Open']), 'high': float(row['High']),
                     'low': float(row['Low']), 'close': float(row['Close']),
@@ -224,16 +225,16 @@ def get_market_data(yf_symbol):
                 ma_slow = df_1h['Close'].rolling(window=20).mean().iloc[-1]
                 if ma_fast > ma_slow: trend_1h = "BULLISH"
                 elif ma_fast < ma_slow: trend_1h = "BEARISH"
-            return candles, trend_1h, df_5m
+            return candles, trend_1h, df_1m
     except:
         pass
     return None, None, None
 
-def analyze_tight_zones_and_strategies(candles, trend_1h, df_5m, is_mtg):
-    if not candles or len(candles) < 3 or df_5m is None: return None
+def analyze_tight_zones_and_strategies(candles, trend_1h, df_1m, is_mtg):
+    if not candles or len(candles) < 3 or df_1m is None: return None
     
-    recent_highs = df_5m['High'].tail(20).max()
-    recent_lows = df_5m['Low'].tail(20).min()
+    recent_highs = df_1m['High'].tail(20).max()
+    recent_lows = df_1m['Low'].tail(20).min()
     
     prev_candle, curr_candle = candles[-2], candles[-1]
     entry_price = curr_candle['close']
@@ -250,33 +251,34 @@ def analyze_tight_zones_and_strategies(candles, trend_1h, df_5m, is_mtg):
     if curr_candle['close'] > curr_candle['open'] and is_strong_body:
         if (near_support or curr_candle['close'] >= prev_candle['high']) and trend_1h == "BULLISH" and (35 <= rsi_val <= 70):
             if is_mtg:
-                return ("⚡ 1-STEP HEAVY MTG", "CALL 🟢", f"{entry_price:.5f}", "💎 VIP 99.9% (Accurate Demand Zone Rebound)", entry_price)
+                return ("⚡ 1-STEP HEAVY MTG", "CALL 🟢", f"{entry_price:.5f}", "💎 VIP 99.9% (1M Demand Zone Rebound)", entry_price)
             else:
-                return ("🎯 5M Pro Breakout", "CALL 🟢", f"{entry_price:.5f}", "🔥 PRO 92% (Bullish Trend + Support Zone)", entry_price)
+                return ("🎯 1M Pro Breakout", "CALL 🟢", f"{entry_price:.5f}", "🔥 PRO 92% (1M Bullish Trend + Support)", entry_price)
 
     elif curr_candle['close'] < curr_candle['open'] and is_strong_body:
         if (near_resistance or curr_candle['close'] <= prev_candle['low']) and trend_1h == "BEARISH" and (30 <= rsi_val <= 65):
             if is_mtg:
-                return ("⚡ 1-STEP HEAVY MTG", "PUT 🔻", f"{entry_price:.5f}", "💎 VIP 99.9% (Accurate Supply Zone Rejection)", entry_price)
+                return ("⚡ 1-STEP HEAVY MTG", "PUT 🔻", f"{entry_price:.5f}", "💎 VIP 99.9% (1M Supply Zone Rejection)", entry_price)
             else:
-                return ("🎯 5M Pro Rejection", "PUT 🔻", f"{entry_price:.5f}", "🔥 PRO 92% (Bearish Trend + Resistance Zone)", entry_price)
+                return ("🎯 1M Pro Rejection", "PUT 🔻", f"{entry_price:.5f}", "🔥 PRO 92% (1M Bearish Trend + Resistance)", entry_price)
 
     return None
 
 async def process_signal(pair: str, yf_symbol: str, pattern: str, direction: str, entry_str: str, logic_reason: str, entry_num: float, is_mtg: bool):
     global session_stats, signals_in_session, is_mtg_pending
     
-    title = "⚡ 1-STEP HEAVY MTG SIGNAL" if is_mtg else "💎 FATIMA FOREX FX - 5M PRO SIGNAL"
+    title = "⚡ 1-STEP HEAVY MTG SIGNAL" if is_mtg else "💎 FATIMA FOREX FX - 1M PRO SIGNAL"
     signal_msg = (
         f"**{title}**\n━━━━━━━━━━━━━━━━━━━━━━━━━\n"
-        f"📊 **Asset:** `#{pair}`\n⏳ **Timeframe:** `5 Minutes`\n"
+        f"📊 **Asset:** `#{pair}`\n⏳ **Timeframe:** `1 Minute`\n"
         f"🎯 **Pattern:** `{pattern}`\n📈 **Direction:** `{direction}`\n"
         f"📍 **Entry Price:** `{entry_str}`\n💡 **Logic / Reason:** `{logic_reason}`\n"
-        f"⏱️ **Expiry:** `Exact 5 Minutes`\n━━━━━━━━━━━━━━━━━━━━━━━━━"
+        f"⏱️ **Expiry:** `Exact 1 Minute`\n━━━━━━━━━━━━━━━━━━━━━━━━━"
     )
     send_telegram_message_with_result_buttons(signal_msg)
 
-    await asyncio.sleep(300)
+    # Wait for 1 minute (60 seconds) instead of 5 minutes
+    await asyncio.sleep(60)
     
     candles_after, _, _ = get_market_data(yf_symbol)
     exit_num = candles_after[-1]['close'] if candles_after and len(candles_after) > 0 else entry_num
@@ -295,7 +297,7 @@ async def process_signal(pair: str, yf_symbol: str, pattern: str, direction: str
             result_status = "✅ **WIN / ITM 🎯**"
         else:
             is_mtg_pending = True
-            result_status = "⚠️ **LOSS ➔ 1-Step MTG Triggered (Waiting 2 Min)...**"
+            result_status = "⚠️ **LOSS ➔ 1-Step MTG Triggered (Waiting 1 Min)...**"
     else:
         signals_in_session += 1
         session_stats["total"] += 1
@@ -324,22 +326,22 @@ async def process_signal(pair: str, yf_symbol: str, pattern: str, direction: str
         total_t, wins_t, losses_t = session_stats["total"], session_stats["wins"], session_stats["losses"]
         accuracy = (wins_t / total_t * 100) if total_t > 0 else 0
         summary_msg = (
-            f"🎯 **1 HOUR SESSION SUMMARY** 🎯\n━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+            f"🎯 **SESSION SUMMARY (1M)** 🎯\n━━━━━━━━━━━━━━━━━━━━━━━━━\n"
             f"🎯 **Total:** `{signals_in_session}` | ✅ **Wins:** `{wins_t}` | ❌ **Losses:** `{losses_t}`\n"
             f"📈 **Accuracy:** `{accuracy:.2f}%`\n━━━━━━━━━━━━━━━━━━━━━━━━━\n"
-            f"🛑 **Taking a 10 minutes break!**"
+            f"🛑 **Taking a 5 minutes break!**"
         )
     
         send_telegram_simple_message(summary_msg)
         signals_in_session = 0
         session_stats = {"total": 0, "wins": 0, "losses": 0, "consecutive_losses": 0}
         is_mtg_pending = False
-        await asyncio.sleep(600)
-        send_telegram_simple_message("🚀 **SESSION RESUMED!**")
+        await asyncio.sleep(300)
+        send_telegram_simple_message("🚀 **1M SESSION RESUMED!**")
 
 async def main():
     global is_mtg_pending
-    print("Fatima Forex FX Bot Active...")
+    print("Fatima Forex FX 1M Bot Active...")
     asyncio.create_task(handle_telegram_callbacks())
     
     while True:
@@ -355,22 +357,22 @@ async def main():
 
         signal_found = False
         for pair, yf_symbol in LIVE_PAIRS_MAP.items():
-            candles, trend_1h, df_5m = get_market_data(yf_symbol)
-            signal = analyze_tight_zones_and_strategies(candles, trend_1h, df_5m, is_mtg_pending)
+            candles, trend_1h, df_1m = get_market_data(yf_symbol)
+            signal = analyze_tight_zones_and_strategies(candles, trend_1h, df_1m, is_mtg_pending)
             
             if signal:
                 pattern, direction, entry_str, logic_reason, entry_num = signal
                 
                 if is_mtg_pending:
-                    await asyncio.sleep(120)
+                    await asyncio.sleep(60)
                 
                 await process_signal(pair, yf_symbol, pattern, direction, entry_str, logic_reason, entry_num, is_mtg_pending)
                 signal_found = True
-                await asyncio.sleep(300)
+                await asyncio.sleep(60)
                 break  
                 
         if not signal_found:
-            await asyncio.sleep(30)
+            await asyncio.sleep(15)
 
 if __name__ == "__main__":
     asyncio.run(main())
