@@ -7,9 +7,10 @@ import numpy as np
 import pandas as pd
 import yfinance as yf
 from datetime import datetime, timedelta
+from playwright.async_api import async_playwright
 
 # ==========================================
-# ⚙️ LIGHTWEIGHT PRO BOT CONFIGURATION
+# ⚙️ ULTIMATE PRO BOT CONFIGURATION
 # ==========================================
 TELEGRAM_BOT_TOKEN = "8758950547:AAFRBa1f31fZ0lJciyI05mcoCZYv16bf5hs"
 CHANNEL_CHAT_ID = "@Binary_Signals_Live_Malik"
@@ -29,7 +30,9 @@ LIVE_PAIRS_MAP = {
 session_stats = {"total": 0, "wins": 0, "losses": 0, "consecutive_losses": 0}
 signals_in_session = 0
 is_mtg_pending = False
+is_news_break_active = False
 
+# --- NEWS FILTER SYSTEM ---
 def check_forex_news_events():
     try:
         url = "https://nfs.faireconomy.media/ff_calendar_thisweek.json"
@@ -37,6 +40,7 @@ def check_forex_news_events():
         if response.status_code == 200:
             events = response.json()
             now_utc = datetime.utcnow()
+            
             for event in events:
                 if event.get("impact") == "High":
                     date_str = event.get("date")
@@ -45,10 +49,11 @@ def check_forex_news_events():
                         time_diff = (event_time - now_utc).total_seconds() / 60
                         if -5 <= time_diff <= 15:
                             return True, event.get("title", "High Impact News"), event.get("country", "USD")
-    except:
-        pass
+    except Exception as e:
+        print(f"News Check Error: {e}")
     return False, "", ""
 
+# --- DATABASE FUNCTIONS ---
 def load_history():
     if os.path.exists(HISTORY_FILE):
         try:
@@ -69,13 +74,14 @@ def save_trade_to_db(is_win):
     try:
         with open(HISTORY_FILE, "w") as f:
             json.dump(history, f)
-    except:
-        pass
+    except Exception as e:
+        print(f"DB Save Error: {e}")
 
 def get_stats_by_period(period_type):
     history = load_history()
     now = datetime.utcnow()
     filtered_wins, filtered_losses = 0, 0
+    
     for trade in history:
         try:
             trade_time = datetime.strptime(trade["date"], "%Y-%m-%d")
@@ -93,6 +99,7 @@ def get_stats_by_period(period_type):
                     else: filtered_losses += 1
         except:
             continue
+                
     total = filtered_wins + filtered_losses
     accuracy = (filtered_wins / total * 100) if total > 0 else 0.0
     return total, filtered_wins, filtered_losses, accuracy
@@ -105,7 +112,7 @@ def is_london_newyork_session():
         return True
     return False
 
-def send_telegram_message_with_result_buttons(text):
+def send_telegram_message_with_result_buttons(text, pair):
     url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
     inline_keyboard = {
         "inline_keyboard": [
@@ -123,10 +130,10 @@ def send_telegram_message_with_result_buttons(text):
         'chat_id': CHANNEL_CHAT_ID, 
         'text': text, 
         'parse_mode': 'Markdown',
-        'reply_markup': json.dumps(inline_keyboard)
+        'reply_markup': inline_keyboard
     }
     try:
-        requests.post(url, data=payload, timeout=20)
+        requests.post(url, json=payload, timeout=20)
     except Exception as e:
         print(f"Telegram Message Error: {e}")
 
@@ -137,6 +144,38 @@ def send_telegram_simple_message(text):
         requests.post(url, data=payload, timeout=20)
     except Exception as e:
         print(f"Telegram Message Error: {e}")
+
+def send_telegram_photo_with_result_buttons(photo_path, caption, pair):
+    url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendPhoto"
+    inline_keyboard = {
+        "inline_keyboard": [
+            [
+                {"text": "📊 Day Results", "callback_data": "res_day"},
+                {"text": "📅 Week Results", "callback_data": "res_week"}
+            ],
+            [
+                {"text": "🗓️ Month Results", "callback_data": "res_month"},
+                {"text": "👑 Admin Portal", "callback_data": "res_admin"}
+            ]
+        ]
+    }
+    for attempt in range(3):
+        try:
+            if os.path.exists(photo_path) and os.path.getsize(photo_path) > 0:
+                with open(photo_path, 'rb') as photo:
+                    payload = {
+                        'chat_id': CHANNEL_CHAT_ID, 
+                        'caption': caption, 
+                        'parse_mode': 'Markdown',
+                        'reply_markup': str(inline_keyboard).replace("'", '"')
+                    }
+                    files = {'photo': photo}
+                    response = requests.post(url, data=payload, files=files, timeout=45)
+                    if response.status_code == 200:
+                        return True
+        except Exception:
+            time.sleep(1)
+    return False
 
 async def handle_telegram_callbacks():
     offset = 0
@@ -153,6 +192,7 @@ async def handle_telegram_callbacks():
                         callback_data = cq["data"]
                         query_id = cq["id"]
                         
+                        ans_text = ""
                         if callback_data == "res_admin":
                             ans_text = (
                                 "👑 *FATIMA ZESHAN FX - VIP PORTAL* 👑\n"
@@ -177,6 +217,7 @@ async def handle_telegram_callbacks():
                                 title = "🗓️ LAST 30 DAYS RESULTS SUMMARY"
                                 
                             total, wins, losses, acc = get_stats_by_period(period)
+                            
                             ans_text = (
                                 f"*{title}*\n"
                                 f"━━━━━━━━━━━━━━━━━━━\n"
@@ -190,9 +231,23 @@ async def handle_telegram_callbacks():
                         ans_url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/answerCallbackQuery"
                         requests.post(ans_url, json={"callback_query_id": query_id, "text": "Loading...", "show_alert": False})
                         send_telegram_simple_message(ans_text)
+        except Exception as e:
+            print(f"Callback Listener Error: {e}")
+        await asyncio.sleep(2)
+
+async def capture_chart(pair: str, output_path: str):
+    async with async_playwright() as p:
+        browser = await p.chromium.launch(headless=True)
+        page = await browser.new_page(viewport={"width": 1200, "height": 750})
+        url = f"https://s.tradingview.com/widgetembed/?symbol=FX:{pair}&interval=5&hidesidetoolbar=1&symboledit=0&saveimage=0&toolbarbg=F1F3F6&studies=[]&theme=dark&style=1"
+        try:
+            await page.goto(url, wait_until="networkidle", timeout=30000)
+            await asyncio.sleep(2)
+            await page.screenshot(path=output_path, clip={"x": 0, "y": 0, "width": 1200, "height": 700})
         except:
             pass
-        await asyncio.sleep(2)
+        finally:
+            await browser.close()
 
 def calculate_rsi(series, period=14):
     delta = series.diff()
@@ -207,10 +262,10 @@ def get_market_data(yf_symbol):
         df_5m = ticker.history(period="3d", interval="5m", auto_adjust=True, timeout=10)
         df_1h = ticker.history(period="3d", interval="1h", auto_adjust=True, timeout=10)
         
-        if not df_5m.empty and len(df_5m) >= 25:
+        if not df_5m.empty and len(df_5m) >= 20:
             df_5m['rsi'] = calculate_rsi(df_5m['Close'], 14)
             candles = []
-            for i in range(-10, 0):
+            for i in range(-5, 0):
                 row = df_5m.iloc[i]
                 candles.append({
                     'open': float(row['Open']), 'high': float(row['High']),
@@ -224,17 +279,13 @@ def get_market_data(yf_symbol):
                 ma_slow = df_1h['Close'].rolling(window=20).mean().iloc[-1]
                 if ma_fast > ma_slow: trend_1h = "BULLISH"
                 elif ma_fast < ma_slow: trend_1h = "BEARISH"
-            return candles, trend_1h, df_5m
+            return candles, trend_1h
     except:
         pass
-    return None, None, None
+    return None, None
 
-def analyze_tight_zones_and_strategies(candles, trend_1h, df_5m, is_mtg):
-    if not candles or len(candles) < 3 or df_5m is None: return None
-    
-    recent_highs = df_5m['High'].tail(20).max()
-    recent_lows = df_5m['Low'].tail(20).min()
-    
+def analyze_multi_strategies(candles, trend_1h, is_mtg):
+    if not candles or len(candles) < 2: return None
     prev_candle, curr_candle = candles[-2], candles[-1]
     entry_price = curr_candle['close']
     curr_body = abs(curr_candle['close'] - curr_candle['open'])
@@ -242,83 +293,96 @@ def analyze_tight_zones_and_strategies(candles, trend_1h, df_5m, is_mtg):
     if curr_range == 0: return None
 
     rsi_val = curr_candle['rsi']
-    is_strong_body = curr_body >= (curr_range * 0.60)
+    is_strong_body = curr_body >= (curr_range * 0.65)
     
-    near_support = abs(entry_price - recent_lows) <= (recent_highs - recent_lows) * 0.25
-    near_resistance = abs(entry_price - recent_highs) <= (recent_highs - recent_lows) * 0.25
-
     if curr_candle['close'] > curr_candle['open'] and is_strong_body:
-        if (near_support or curr_candle['close'] >= prev_candle['high']) and trend_1h == "BULLISH" and (35 <= rsi_val <= 70):
-            if is_mtg:
-                return ("⚡ 1-STEP HEAVY MTG", "CALL 🟢", f"{entry_price:.5f}", "💎 VIP 99.9% (Accurate Demand Zone Rebound)", entry_price)
-            else:
-                return ("🎯 5M Pro Breakout", "CALL 🟢", f"{entry_price:.5f}", "🔥 PRO 92% (Bullish Trend + Support Zone)", entry_price)
+        if curr_candle['close'] > prev_candle['high'] and trend_1h == "BULLISH" and (40 <= rsi_val <= 65):
+            tag = "🔥 1-STEP HEAVY MTG (Breakout)" if is_mtg else "🎯 5M High Breakout"
+            return (tag, "CALL 🟢", f"{entry_price:.5f}", "💎 VIP 99% (MTG)" if is_mtg else "🔥 PRO 85%+", entry_price)
 
     elif curr_candle['close'] < curr_candle['open'] and is_strong_body:
-        if (near_resistance or curr_candle['close'] <= prev_candle['low']) and trend_1h == "BEARISH" and (30 <= rsi_val <= 65):
-            if is_mtg:
-                return ("⚡ 1-STEP HEAVY MTG", "PUT 🔻", f"{entry_price:.5f}", "💎 VIP 99.9% (Accurate Supply Zone Rejection)", entry_price)
-            else:
-                return ("🎯 5M Pro Rejection", "PUT 🔻", f"{entry_price:.5f}", "🔥 PRO 92% (Bearish Trend + Resistance Zone)", entry_price)
+        if curr_candle['close'] < prev_candle['low'] and trend_1h == "BEARISH" and (35 <= rsi_val <= 60):
+            tag = "🔥 1-STEP HEAVY MTG (Breakout)" if is_mtg else "🎯 5M Low Breakout"
+            return (tag, "PUT 🔻", f"{entry_price:.5f}", "💎 VIP 99% (MTG)" if is_mtg else "🔥 PRO 85%+", entry_price)
+
+    prev_body = abs(prev_candle['close'] - prev_candle['open'])
+    if curr_body > prev_body * 1.2:
+        if curr_candle['close'] > curr_candle['open'] and prev_candle['close'] < prev_candle['open'] and trend_1h == "BULLISH" and rsi_val < 65:
+            tag = "🔥 1-STEP HEAVY MTG (Bullish Engulfing)" if is_mtg else "🚀 Bullish Engulfing Pattern"
+            return (tag, "CALL 🟢", f"{entry_price:.5f}", "💎 VIP 99% (MTG)" if is_mtg else "🔥 PRO 88%+", entry_price)
+        elif curr_candle['close'] < curr_candle['open'] and prev_candle['close'] > prev_candle['open'] and trend_1h == "BEARISH" and rsi_val > 35:
+            tag = "🔥 1-STEP HEAVY MTG (Bearish Engulfing)" if is_mtg else "📉 Bearish Engulfing Pattern"
+            return (tag, "PUT 🔻", f"{entry_price:.5f}", "💎 VIP 99% (MTG)" if is_mtg else "🔥 PRO 88%+", entry_price)
+
+    upper_wick = curr_candle['high'] - max(curr_candle['open'], curr_candle['close'])
+    lower_wick = min(curr_candle['open'], curr_candle['close']) - curr_candle['low']
+    
+    if upper_wick > (curr_body * 2) and rsi_val >= 80:
+        tag = "🔥 1-STEP HEAVY MTG (Pin Bar Rejection)" if is_mtg else "🔻 Top Rejection Pin Bar"
+        return (tag, "PUT 🔻", f"{entry_price:.5f}", "💎 VIP 99% (MTG)" if is_mtg else "🔥 PRO 90%+", entry_price)
+    elif lower_wick > (curr_body * 2) and rsi_val <= 20:
+        tag = "🔥 1-STEP HEAVY MTG (Pin Bar Rejection)" if is_mtg else "🟢 Bottom Rejection Pin Bar"
+        return (tag, "CALL 🟢", f"{entry_price:.5f}", "💎 VIP 99% (MTG)" if is_mtg else "🔥 PRO 90%+", entry_price)
 
     return None
 
-async def process_signal(pair: str, yf_symbol: str, pattern: str, direction: str, entry_str: str, logic_reason: str, entry_num: float, is_mtg: bool):
+async def process_signal(pair: str, yf_symbol: str, pattern: str, direction: str, entry_str: str, strength: str, entry_num: float, is_mtg: bool):
     global session_stats, signals_in_session, is_mtg_pending
+    timestamp = int(time.time())
+    live_img, result_img = f"{pair}_live_{timestamp}.png", f"{pair}_result_{timestamp}.png"
     
-    title = "⚡ 1-STEP HEAVY MTG SIGNAL" if is_mtg else "💎 FATIMA FOREX FX - 5M PRO SIGNAL"
+    await capture_chart(pair, live_img)
+    title = "⚡ 1-STEP HEAVY MTG ALERT" if is_mtg else "💎 FATIMA FOREX FX - PRO SESSION ALERT"
     signal_msg = (
         f"**{title}**\n━━━━━━━━━━━━━━━━━━━━━━━━━\n"
         f"📊 **Asset:** `#{pair}`\n⏳ **Timeframe:** `5 Minutes`\n"
         f"🎯 **Pattern:** `{pattern}`\n📈 **Direction:** `{direction}`\n"
-        f"📍 **Entry Price:** `{entry_str}`\n💡 **Logic / Reason:** `{logic_reason}`\n"
-        f"⏱️ **Expiry:** `Exact 5 Minutes`\n━━━━━━━━━━━━━━━━━━━━━━━━━"
+        f"📍 **Entry:** `{entry_str}`\n💪 **Accuracy:** `{strength}`\n"
+        f"⏱️ **Expiry:** `Exact 2 Minutes`\n━━━━━━━━━━━━━━━━━━━━━━━━━"
     )
-    send_telegram_message_with_result_buttons(signal_msg)
-
-    await asyncio.sleep(300)
     
-    candles_after, _, _ = get_market_data(yf_symbol)
+    if os.path.exists(live_img):
+        send_telegram_photo_with_result_buttons(live_img, signal_msg, pair)
+        try: os.remove(live_img)
+        except: pass
+    else:
+        send_telegram_message_with_result_buttons(signal_msg, pair)
+
+    await asyncio.sleep(120)
+    candles_after, _ = get_market_data(yf_symbol)
     exit_num = candles_after[-1]['close'] if candles_after and len(candles_after) > 0 else entry_num
     exit_str = f"{exit_num:.5f}"
     
     is_win = True if ("CALL" in direction and exit_num > entry_num) or ("PUT" in direction and exit_num < entry_num) else False
+    session_stats["total"] += 1
+    signals_in_session += 1
+    save_trade_to_db(is_win)
     
-    if not is_mtg:
-        if is_win:
-            session_stats["total"] += 1
-            session_stats["wins"] += 1
-            signals_in_session += 1
-            session_stats["consecutive_losses"] = 0
-            is_mtg_pending = False
-            save_trade_to_db(True)
-            result_status = "✅ **WIN / ITM 🎯**"
-        else:
-            is_mtg_pending = True
-            result_status = "⚠️ **LOSS ➔ 1-Step MTG Triggered (Waiting 2 Min)...**"
+    if is_win:
+        session_stats["wins"] += 1
+        session_stats["consecutive_losses"] = 0
+        is_mtg_pending = False
+        result_status = "✅ **WIN / ITM 🎯**"
     else:
-        signals_in_session += 1
-        session_stats["total"] += 1
-        if is_win:
-            session_stats["wins"] += 1
-            session_stats["consecutive_losses"] = 0
-            is_mtg_pending = False
-            save_trade_to_db(True)
-            result_status = "✅ **MTG WIN / ITM 🎯**"
-        else:
-            session_stats["losses"] += 1
-            session_stats["consecutive_losses"] += 1
-            is_mtg_pending = False
-            save_trade_to_db(False)
-            result_status = "❌ **MTG LOSS / OTM 🛑**"
+        session_stats["losses"] += 1
+        session_stats["consecutive_losses"] += 1
+        is_mtg_pending = True
+        result_status = "❌ **LOSS / OTM 🛑 (1-Step MTG Triggered)**"
 
+    await capture_chart(pair, result_img)
     result_msg = (
         f"🏆 **FATIMA FOREX FX - RESULT** 🏆\n━━━━━━━━━━━━━━━━━━━━━━━━━\n"
         f"📊 **Asset:** `#{pair}`\n📍 **Entry:** `{entry_str}` | 🏁 **Exit:** `{exit_str}`\n"
         f"✨ **Status:** {result_status}\n━━━━━━━━━━━━━━━━━━━━━━━━━\n"
         f"📊 *Progress* ➔ Signal: `{signals_in_session}`/10 | Wins: `{session_stats['wins']}` | Losses: `{session_stats['losses']}`"
     )
-    send_telegram_message_with_result_buttons(result_msg)
+    
+    if os.path.exists(result_img):
+        send_telegram_photo_with_result_buttons(result_img, result_msg, pair)
+        try: os.remove(result_img)
+        except: pass
+    else:
+        send_telegram_message_with_result_buttons(result_msg, pair)
 
     if signals_in_session >= 10:
         total_t, wins_t, losses_t = session_stats["total"], session_stats["wins"], session_stats["losses"]
@@ -329,7 +393,6 @@ async def process_signal(pair: str, yf_symbol: str, pattern: str, direction: str
             f"📈 **Accuracy:** `{accuracy:.2f}%`\n━━━━━━━━━━━━━━━━━━━━━━━━━\n"
             f"🛑 **Taking a 10 minutes break!**"
         )
-    
         send_telegram_simple_message(summary_msg)
         signals_in_session = 0
         session_stats = {"total": 0, "wins": 0, "losses": 0, "consecutive_losses": 0}
@@ -339,39 +402,45 @@ async def process_signal(pair: str, yf_symbol: str, pattern: str, direction: str
 
 async def main():
     global is_mtg_pending
-    print("Fatima Forex FX Bot Active...")
+    print("Fatima Forex FX Bot Active with Callback-based Admin Portal & News Filter...")
     asyncio.create_task(handle_telegram_callbacks())
     
     while True:
         has_news, news_title, news_currency = check_forex_news_events()
         if has_news:
-            send_telegram_simple_message(f"🚨 **HIGH IMPACT NEWS BREAK** 🚨\n⚠️ **Event:** `{news_title}`\n🛑 **Paused for safety.**")
+            news_alert_msg = (
+                f"🚨 **HIGH IMPACT NEWS BREAK ALERT** 🚨\n"
+                f"━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+                f"⚠️ **Event:** `{news_title}`\n"
+                f"💱 **Currency:** `{news_currency}`\n"
+                f"🛑 **Bot Status:** Paused for safety (High Volatility Ahead).\n"
+                f"━━━━━━━━━━━━━━━━━━━━━━━━━"
+            )
+            print(f"News Alert Sent: {news_title}")
+            send_telegram_simple_message(news_alert_msg)
             await asyncio.sleep(1800)
             continue
 
         if not is_london_newyork_session():
+            print(f"[{datetime.now().strftime('%H:%M:%S')}] Outside London/New York Session. Waiting...", end="\r")
             await asyncio.sleep(60)
             continue
 
         signal_found = False
         for pair, yf_symbol in LIVE_PAIRS_MAP.items():
-            candles, trend_1h, df_5m = get_market_data(yf_symbol)
-            signal = analyze_tight_zones_and_strategies(candles, trend_1h, df_5m, is_mtg_pending)
+            print(f"Scanning Active Session -> {pair} [MTG: {is_mtg_pending}]                    ", end="\r")
+            candles, trend_1h = get_market_data(yf_symbol)
+            signal = analyze_multi_strategies(candles, trend_1h, is_mtg_pending)
             
             if signal:
-                pattern, direction, entry_str, logic_reason, entry_num = signal
-                
-                if is_mtg_pending:
-                    await asyncio.sleep(120)
-                
-                await process_signal(pair, yf_symbol, pattern, direction, entry_str, logic_reason, entry_num, is_mtg_pending)
+                pattern, direction, entry_str, strength, entry_num = signal
+                await process_signal(pair, yf_symbol, pattern, direction, entry_str, strength, entry_num, is_mtg_pending)
                 signal_found = True
                 await asyncio.sleep(300)
                 break  
                 
         if not signal_found:
-            await asyncio.sleep(30)
+            await asyncio.sleep(10)
 
 if __name__ == "__main__":
     asyncio.run(main())
-
