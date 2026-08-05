@@ -12,7 +12,7 @@ import matplotlib.pyplot as plt
 from datetime import datetime, timedelta
 
 # ==========================================
-# ⚙️ SIMPLE STRATEGY BOT (WITH RESULT SCREENSHOT)
+# ⚙️ FLEXIBLE STRATEGY BOT (LOOSE CONDITIONS)
 # ==========================================
 TELEGRAM_BOT_TOKEN = "8758950547:AAFRBa1f31fZ0lJciyI05mcoCZYv16bf5hs"
 CHANNEL_CHAT_ID = "@Binary_Signals_Live_Malik"
@@ -153,7 +153,7 @@ def send_telegram_photo_with_caption(photo_path, caption):
             files = {'photo': photo}
             requests.post(url, data=payload, files=files, timeout=30)
     except Exception as e:
-        print(f"Photo send error: {e}")
+        print(f"Photo error: {e}")
 
 def send_telegram_simple_message(text):
     url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
@@ -174,7 +174,6 @@ def generate_trade_chart(df, pair, entry_price, exit_price, is_win):
         plt.legend(loc='upper left', facecolor='#222', edgecolor='none', labelcolor='white')
         plt.grid(True, linestyle=':', alpha=0.3)
         
-        # Dark theme background for aesthetic look
         ax = plt.gca()
         ax.set_facecolor('#111827')
         plt.gcf().patch.set_facecolor('#1f2937')
@@ -184,8 +183,7 @@ def generate_trade_chart(df, pair, entry_price, exit_price, is_win):
         plt.savefig(SCREENSHOT_FILE, dpi=150, facecolor=plt.gcf().get_facecolor(), edgecolor='none')
         plt.close()
         return True
-    except Exception as e:
-        print(f"Chart generation error: {e}")
+    except:
         return False
 
 def get_all_pairs_status_text():
@@ -278,25 +276,27 @@ def get_market_data(yf_symbol):
         pass
     return None
 
-def analyze_support_resistance(df_1m):
+def analyze_support_resistance_loose(df_1m):
     if df_1m is None or len(df_1m) < 15: return None
     
+    # Range ko loose kar diya hai taake jaldi signal mil sakein
     support_level = df_1m['Low'].tail(15).min()
     resistance_level = df_1m['High'].tail(15).max()
     
     curr = df_1m.iloc[-1]
     entry_price = float(curr['Close'])
     
-    near_support = abs(entry_price - support_level) <= (resistance_level - support_level) * 0.15
-    near_resistance = abs(entry_price - resistance_level) <= (resistance_level - support_level) * 0.15
+    # 35% tak ka gap allow kiya hai
+    near_support = abs(entry_price - support_level) <= (resistance_level - support_level) * 0.35
+    near_resistance = abs(entry_price - resistance_level) <= (resistance_level - support_level) * 0.35
     
     is_green = curr['Close'] > curr['Open']
     is_red = curr['Close'] < curr['Open']
     
     if near_support and is_green:
-        return "CALL 🟢", entry_price, "Support Level Rebound"
+        return "CALL 🟢", entry_price, "Support Zone Rebound"
     elif near_resistance and is_red:
-        return "PUT 🔻", entry_price, "Resistance Level Rejection"
+        return "PUT 🔻", entry_price, "Resistance Zone Rejection"
         
     return None
 
@@ -366,7 +366,6 @@ async def execute_trade(pair, yf_symbol, direction, is_mtg=False):
         f"📊 *Progress* ➔ Signal: `{signals_in_session}`/10 | Wins: `{session_stats['wins']}` | Losses: `{session_stats['losses']}`"
     )
     
-    # Chart screenshot generate karke result ke sath photo bheji jayegi
     if df_post is not None:
         chart_created = generate_trade_chart(df_post, pair, entry_num, exit_num, is_win)
         if chart_created and os.path.exists(SCREENSHOT_FILE):
@@ -374,7 +373,7 @@ async def execute_trade(pair, yf_symbol, direction, is_mtg=False):
         else:
             send_telegram_message_with_result_buttons(res_msg)
     else:
-        send_telegram_message_with_result_buttons(res_msg)
+            send_telegram_message_with_result_buttons(res_msg)
 
     if signals_in_session >= 10:
         tot, w, l = session_stats["total"], session_stats["wins"], session_stats["losses"]
@@ -393,7 +392,7 @@ async def execute_trade(pair, yf_symbol, direction, is_mtg=False):
 
 async def main():
     global is_mtg_pending, pending_pair, pending_direction
-    print("Bot Active with Result Screenshot Feature...")
+    print("Bot Active with Flexible Strategy...")
     asyncio.create_task(handle_telegram_callbacks())
     
     while True:
@@ -414,17 +413,17 @@ async def main():
             signal_found = False
             for pair, yf_symbol in LIVE_PAIRS_MAP.items():
                 df_1m = get_market_data(yf_symbol)
-                res = analyze_support_resistance(df_1m)
+                res = analyze_support_resistance_loose(df_1m)
                 
                 if res:
                     direction, _, _ = res
                     await execute_trade(pair, yf_symbol, direction, is_mtg=False)
                     signal_found = True
-                    await asyncio.sleep(30)
+                    await asyncio.sleep(15)
                     break
                     
             if not signal_found:
-                await asyncio.sleep(15)
+                await asyncio.sleep(10)
         except Exception as e:
             print(f"Error: {e}")
             await asyncio.sleep(15)
