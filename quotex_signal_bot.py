@@ -10,7 +10,7 @@ from datetime import datetime, timedelta
 from playwright.async_api import async_playwright
 
 # ==========================================
-# ⚙️ ULTIMATE PRO BOT CONFIGURATION
+# ⚙️ ULTIMATE PRO BOT CONFIGURATION (WITH MTG FIX)
 # ==========================================
 TELEGRAM_BOT_TOKEN = "8758950547:AAFRBa1f31fZ0lJciyI05mcoCZYv16bf5hs"
 CHANNEL_CHAT_ID = "@Binary_Signals_Live_Malik"
@@ -29,7 +29,6 @@ LIVE_PAIRS_MAP = {
 
 session_stats = {"total": 0, "wins": 0, "losses": 0, "consecutive_losses": 0}
 signals_in_session = 0
-is_mtg_pending = False
 is_news_break_active = False
 
 # --- NEWS FILTER SYSTEM ---
@@ -326,19 +325,21 @@ def analyze_multi_strategies(candles, trend_1h, is_mtg):
 
     return None
 
-async def process_signal(pair: str, yf_symbol: str, pattern: str, direction: str, entry_str: str, strength: str, entry_num: float, is_mtg: bool):
-    global session_stats, signals_in_session, is_mtg_pending
+async def process_signal(pair: str, yf_symbol: str, pattern: str, direction: str, entry_str: str, strength: str, entry_num: float):
+    global session_stats, signals_in_session
     timestamp = int(time.time())
-    live_img, result_img = f"{pair}_live_{timestamp}.png", f"{pair}_result_{timestamp}.png"
+    live_img = f"{pair}_live_{timestamp}.png"
+    result_img = f"{pair}_result_{timestamp}.png"
     
+    # --- 1st Trade Signal ---
     await capture_chart(pair, live_img)
-    title = "⚡ 1-STEP HEAVY MTG ALERT" if is_mtg else "💎 FATIMA FOREX FX - PRO SESSION ALERT"
     signal_msg = (
-        f"**{title}**\n━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+        f"**💎 FATIMA FOREX FX - PRO SESSION ALERT**\n━━━━━━━━━━━━━━━━━━━━━━━━━\n"
         f"📊 **Asset:** `#{pair}`\n⏳ **Timeframe:** `5 Minutes`\n"
         f"🎯 **Pattern:** `{pattern}`\n📈 **Direction:** `{direction}`\n"
         f"📍 **Entry:** `{entry_str}`\n💪 **Accuracy:** `{strength}`\n"
-        f"⏱️ **Expiry:** `Exact 2 Minutes`\n━━━━━━━━━━━━━━━━━━━━━━━━━"
+        f"⏱️ **Expiry:** `Exact 2 Minutes`\n"
+        f"⚠️ **Take 1 Step MTG same direction iff loss**\n━━━━━━━━━━━━━━━━━━━━━━━━━"
     )
     
     if os.path.exists(live_img):
@@ -348,42 +349,80 @@ async def process_signal(pair: str, yf_symbol: str, pattern: str, direction: str
     else:
         send_telegram_message_with_result_buttons(signal_msg, pair)
 
+    # Wait for 1st trade expiry
     await asyncio.sleep(120)
     candles_after, _ = get_market_data(yf_symbol)
     exit_num = candles_after[-1]['close'] if candles_after and len(candles_after) > 0 else entry_num
-    exit_str = f"{exit_num:.5f}"
     
-    is_win = True if ("CALL" in direction and exit_num > entry_num) or ("PUT" in direction and exit_num < entry_num) else False
-    session_stats["total"] += 1
-    signals_in_session += 1
-    save_trade_to_db(is_win)
-    
-    if is_win:
+    is_first_win = True if ("CALL" in direction and exit_num > entry_num) or ("PUT" in direction and exit_num < entry_num) else False
+
+    # --- Agar 1st Trade WIN ho jaye ---
+    if is_first_win:
+        session_stats["total"] += 1
+        signals_in_session += 1
         session_stats["wins"] += 1
         session_stats["consecutive_losses"] = 0
-        is_mtg_pending = False
+        save_trade_to_db(True)
+        
         result_status = "✅ **WIN / ITM 🎯**"
-    else:
-        session_stats["losses"] += 1
-        session_stats["consecutive_losses"] += 1
-        is_mtg_pending = True
-        result_status = "❌ **LOSS / OTM 🛑 (1-Step MTG Triggered)**"
+        exit_str = f"{exit_num:.5f}"
+        
+        await capture_chart(pair, result_img)
+        result_msg = (
+            f"🏆 **FATIMA FOREX FX - RESULT** 🏆\n━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+            f"📊 **Asset:** `#{pair}`\n📍 **Entry:** `{entry_str}` | 🏁 **Exit:** `{exit_str}`\n"
+            f"✨ **Status:** {result_status}\n━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+            f"📊 *Progress* ➔ Signal: `{signals_in_session}`/10 | Wins: `{session_stats['wins']}` | Losses: `{session_stats['losses']}`"
+        )
+        if os.path.exists(result_img):
+            send_telegram_photo_with_result_buttons(result_img, result_msg, pair)
+            try: os.remove(result_img)
+            except: pass
+        else:
+            send_telegram_message_with_result_buttons(result_msg, pair)
 
-    await capture_chart(pair, result_img)
-    result_msg = (
-        f"🏆 **FATIMA FOREX FX - RESULT** 🏆\n━━━━━━━━━━━━━━━━━━━━━━━━━\n"
-        f"📊 **Asset:** `#{pair}`\n📍 **Entry:** `{entry_str}` | 🏁 **Exit:** `{exit_str}`\n"
-        f"✨ **Status:** {result_status}\n━━━━━━━━━━━━━━━━━━━━━━━━━\n"
-        f"📊 *Progress* ➔ Signal: `{signals_in_session}`/10 | Wins: `{session_stats['wins']}` | Losses: `{session_stats['losses']}`"
-    )
-    
-    if os.path.exists(result_img):
-        send_telegram_photo_with_result_buttons(result_img, result_msg, pair)
-        try: os.remove(result_img)
-        except: pass
+    # --- Agar 1st Trade LOSS ho jaye, toh 1-Step MTG ka wait karein ---
     else:
-        send_telegram_message_with_result_buttons(result_msg, pair)
+        print(f"[{pair}] 1st Trade Loss! Waiting for 1-Step MTG result...")
+        mtg_entry_num = exit_num
+        mtg_entry_str = f"{mtg_entry_num:.5f}"
+        
+        # MTG trade ka wait (2 minutes expiry)
+        await asyncio.sleep(120)
+        candles_mtg, _ = get_market_data(yf_symbol)
+        mtg_exit_num = candles_mtg[-1]['close'] if candles_mtg and len(candles_mtg) > 0 else mtg_entry_num
+        
+        is_mtg_win = True if ("CALL" in direction and mtg_exit_num > mtg_entry_num) or ("PUT" in direction and mtg_exit_num < mtg_entry_num) else False
+        
+        session_stats["total"] += 1
+        signals_in_session += 1
+        save_trade_to_db(is_mtg_win)
+        
+        if is_mtg_win:
+            session_stats["wins"] += 1
+            session_stats["consecutive_losses"] = 0
+            result_status = "✅ **MTG WIN / ITM 🎯**"
+        else:
+            session_stats["losses"] += 1
+            session_stats["consecutive_losses"] += 1
+            result_status = "❌ **MTG LOSS / OTM 🛑**"
+            
+        mtg_exit_str = f"{mtg_exit_num:.5f}"
+        await capture_chart(pair, result_img)
+        result_msg = (
+            f"🏆 **FATIMA FOREX FX - MTG RESULT** 🏆\n━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+            f"📊 **Asset:** `#{pair}`\n📍 **MTG Entry:** `{mtg_entry_str}` | 🏁 **Exit:** `{mtg_exit_str}`\n"
+            f"✨ **Status:** {result_status}\n━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+            f"📊 *Progress* ➔ Signal: `{signals_in_session}`/10 | Wins: `{session_stats['wins']}` | Losses: `{session_stats['losses']}`"
+        )
+        if os.path.exists(result_img):
+            send_telegram_photo_with_result_buttons(result_img, result_msg, pair)
+            try: os.remove(result_img)
+            except: pass
+        else:
+            send_telegram_message_with_result_buttons(result_msg, pair)
 
+    # Session limit check
     if signals_in_session >= 10:
         total_t, wins_t, losses_t = session_stats["total"], session_stats["wins"], session_stats["losses"]
         accuracy = (wins_t / total_t * 100) if total_t > 0 else 0
@@ -396,12 +435,10 @@ async def process_signal(pair: str, yf_symbol: str, pattern: str, direction: str
         send_telegram_simple_message(summary_msg)
         signals_in_session = 0
         session_stats = {"total": 0, "wins": 0, "losses": 0, "consecutive_losses": 0}
-        is_mtg_pending = False
         await asyncio.sleep(600)
         send_telegram_simple_message("🚀 **SESSION RESUMED!**")
 
 async def main():
-    global is_mtg_pending
     print("Fatima Forex FX Bot Active with Callback-based Admin Portal & News Filter...")
     asyncio.create_task(handle_telegram_callbacks())
     
@@ -428,13 +465,13 @@ async def main():
 
         signal_found = False
         for pair, yf_symbol in LIVE_PAIRS_MAP.items():
-            print(f"Scanning Active Session -> {pair} [MTG: {is_mtg_pending}]                    ", end="\r")
+            print(f"Scanning Active Session -> {pair}                    ", end="\r")
             candles, trend_1h = get_market_data(yf_symbol)
-            signal = analyze_multi_strategies(candles, trend_1h, is_mtg_pending)
+            signal = analyze_multi_strategies(candles, trend_1h, False)
             
             if signal:
                 pattern, direction, entry_str, strength, entry_num = signal
-                await process_signal(pair, yf_symbol, pattern, direction, entry_str, strength, entry_num, is_mtg_pending)
+                await process_signal(pair, yf_symbol, pattern, direction, entry_str, strength, entry_num)
                 signal_found = True
                 await asyncio.sleep(300)
                 break  
