@@ -6,14 +6,18 @@ import requests
 import numpy as np
 import pandas as pd
 import yfinance as yf
+import matplotlib
+matplotlib.use('Agg')
+import matplotlib.pyplot as plt
 from datetime import datetime, timedelta
 
 # ==========================================
-# ⚙️ SIMPLE STRATEGY BOT (10 AM - 9 PM PKT)
+# ⚙️ SIMPLE STRATEGY BOT (WITH RESULT SCREENSHOT)
 # ==========================================
 TELEGRAM_BOT_TOKEN = "8758950547:AAFRBa1f31fZ0lJciyI05mcoCZYv16bf5hs"
 CHANNEL_CHAT_ID = "@Binary_Signals_Live_Malik"
 HISTORY_FILE = "trading_history.json"
+SCREENSHOT_FILE = "trade_result_chart.png"
 
 LIVE_PAIRS_MAP = {
     "EURUSD": "EURUSD=X", "GBPUSD": "GBPUSD=X", "USDJPY": "USDJPY=X",
@@ -31,7 +35,6 @@ signals_in_session = 0
 is_mtg_pending = False
 pending_pair = None
 pending_direction = None
-pending_entry = 0.0
 
 def load_history():
     if os.path.exists(HISTORY_FILE):
@@ -85,7 +88,6 @@ def is_allowed_time_session():
     now_utc = datetime.utcnow()
     pk_time = now_utc + timedelta(hours=5)
     current_hour = pk_time.hour
-    # Subha 10 baje se raat 9 baje tak (10 <= hour < 21)
     if 10 <= current_hour < 21:
         return True
     return False
@@ -99,6 +101,9 @@ def get_inline_keyboard():
             ],
             [
                 {"text": "🗓️ Month Results", "callback_data": "res_month"},
+                {"text": "📋 Active Pairs Status", "callback_data": "res_pairs"}
+            ],
+            [
                 {"text": "👑 Admin Portal", "callback_data": "res_admin"}
             ]
         ]
@@ -135,6 +140,21 @@ def edit_telegram_message_with_result_buttons(message_id, text):
     except:
         pass
 
+def send_telegram_photo_with_caption(photo_path, caption):
+    url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendPhoto"
+    try:
+        with open(photo_path, 'rb') as photo:
+            payload = {
+                'chat_id': CHANNEL_CHAT_ID,
+                'caption': caption,
+                'parse_mode': 'Markdown',
+                'reply_markup': json.dumps(get_inline_keyboard())
+            }
+            files = {'photo': photo}
+            requests.post(url, data=payload, files=files, timeout=30)
+    except Exception as e:
+        print(f"Photo send error: {e}")
+
 def send_telegram_simple_message(text):
     url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
     payload = {'chat_id': CHANNEL_CHAT_ID, 'text': text, 'parse_mode': 'Markdown'}
@@ -142,6 +162,53 @@ def send_telegram_simple_message(text):
         requests.post(url, data=payload, timeout=20)
     except:
         pass
+
+def generate_trade_chart(df, pair, entry_price, exit_price, is_win):
+    try:
+        plt.figure(figsize=(8, 4))
+        plt.plot(df.index, df['Close'], label='Price', color='#00d2ff', linewidth=2)
+        plt.axhline(y=entry_price, color='orange', linestyle='--', label=f'Entry: {entry_price:.5f}')
+        plt.axhline(y=exit_price, color='green' if is_win else 'red', linestyle='-', label=f'Exit: {exit_price:.5f}')
+        
+        plt.title(f"Fatima Forex FX - #{pair} Result Chart", color='white', fontsize=12)
+        plt.legend(loc='upper left', facecolor='#222', edgecolor='none', labelcolor='white')
+        plt.grid(True, linestyle=':', alpha=0.3)
+        
+        # Dark theme background for aesthetic look
+        ax = plt.gca()
+        ax.set_facecolor('#111827')
+        plt.gcf().patch.set_facecolor('#1f2937')
+        ax.tick_params(colors='white')
+        
+        plt.tight_layout()
+        plt.savefig(SCREENSHOT_FILE, dpi=150, facecolor=plt.gcf().get_facecolor(), edgecolor='none')
+        plt.close()
+        return True
+    except Exception as e:
+        print(f"Chart generation error: {e}")
+        return False
+
+def get_all_pairs_status_text():
+    status_lines = ["📋 *LIVE PAIRS & CONDITIONS STATUS* 📋\n━━━━━━━━━━━━━━━━━━━━━━━━━"]
+    for pair, yf_symbol in LIVE_PAIRS_MAP.items():
+        try:
+            ticker = yf.Ticker(yf_symbol)
+            df = ticker.history(period="1d", interval="1m", auto_adjust=True, timeout=5)
+            if not df.empty and len(df) >= 10:
+                curr_price = float(df.iloc[-1]['Close'])
+                prev_price = float(df.iloc[-2]['Close'])
+                sup = float(df['Low'].tail(15).min())
+                res = float(df['High'].tail(15).max())
+                
+                trend = "🟢 BULLISH" if curr_price > prev_price else "🔴 BEARISH"
+                status_lines.append(f"• `#{pair}` ➔ Price: `{curr_price:.5f}` | {trend}\n  Support: `{sup:.5f}` | Res: `{res:.5f}`")
+            else:
+                status_lines.append(f"• `#{pair}` ➔ `Syncing...`")
+        except:
+            status_lines.append(f"• `#{pair}` ➔ `Checking...`")
+        
+    status_lines.append("━━━━━━━━━━━━━━━━━━━━━━━━━")
+    return "\n".join(status_lines)
 
 async def handle_telegram_callbacks():
     offset = 0
@@ -171,6 +238,8 @@ async def handle_telegram_callbacks():
                                 "📞 *Contact Number:* `0302-0753076`\n"
                                 "━━━━━━━━━━━━━━━━━━━━━━━━━"
                             )
+                        elif callback_data == "res_pairs":
+                            ans_text = get_all_pairs_status_text()
                         else:
                             period = "day"
                             title = "📊 TODAY'S RESULTS SUMMARY"
@@ -232,7 +301,7 @@ def analyze_support_resistance(df_1m):
     return None
 
 async def execute_trade(pair, yf_symbol, direction, is_mtg=False):
-    global session_stats, signals_in_session, is_mtg_pending, pending_pair, pending_direction, pending_entry
+    global session_stats, signals_in_session, is_mtg_pending, pending_pair, pending_direction
     
     df_pre = get_market_data(yf_symbol)
     if df_pre is None: return
@@ -296,7 +365,16 @@ async def execute_trade(pair, yf_symbol, direction, is_mtg=False):
         f"✨ **Status:** {res_status}\n━━━━━━━━━━━━━━━━━━━━━━━━━\n"
         f"📊 *Progress* ➔ Signal: `{signals_in_session}`/10 | Wins: `{session_stats['wins']}` | Losses: `{session_stats['losses']}`"
     )
-    send_telegram_message_with_result_buttons(res_msg)
+    
+    # Chart screenshot generate karke result ke sath photo bheji jayegi
+    if df_post is not None:
+        chart_created = generate_trade_chart(df_post, pair, entry_num, exit_num, is_win)
+        if chart_created and os.path.exists(SCREENSHOT_FILE):
+            send_telegram_photo_with_caption(SCREENSHOT_FILE, res_msg)
+        else:
+            send_telegram_message_with_result_buttons(res_msg)
+    else:
+        send_telegram_message_with_result_buttons(res_msg)
 
     if signals_in_session >= 10:
         tot, w, l = session_stats["total"], session_stats["wins"], session_stats["losses"]
@@ -315,7 +393,7 @@ async def execute_trade(pair, yf_symbol, direction, is_mtg=False):
 
 async def main():
     global is_mtg_pending, pending_pair, pending_direction
-    print("Simple Support/Resistance Bot Active (10 AM - 9 PM)...")
+    print("Bot Active with Result Screenshot Feature...")
     asyncio.create_task(handle_telegram_callbacks())
     
     while True:
@@ -324,7 +402,6 @@ async def main():
                 await asyncio.sleep(60)
                 continue
                 
-            # Agar pehli trade loss hui hai toh usi pair par foran 1-Step MTG chalega
             if is_mtg_pending and pending_pair:
                 yf_sym = LIVE_PAIRS_MAP.get(pending_pair)
                 await execute_trade(pending_pair, yf_sym, pending_direction, is_mtg=True)
