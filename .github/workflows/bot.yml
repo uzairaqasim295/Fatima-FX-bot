@@ -24,4 +24,4 @@ jobs:
 
       - name: Run Trading Bot
         run: |
-          python quotex_signal_bot.py
+          python -u quotex_signal_bot.py
