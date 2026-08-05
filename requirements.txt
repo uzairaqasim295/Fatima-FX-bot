@@ -2,6 +2,6 @@ requests
 numpy
 pandas
 yfinance
-matplotlib
+playwright
 
 
