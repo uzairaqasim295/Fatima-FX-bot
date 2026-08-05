@@ -12,29 +12,26 @@ import matplotlib.pyplot as plt
 from datetime import datetime, timedelta
 
 # ==========================================
-# ⚙️ FLEXIBLE STRATEGY BOT (LOOSE CONDITIONS)
+# ⚙️ 4-STEP MTG BOT WITH PROFIT TRACKING
 # ==========================================
 TELEGRAM_BOT_TOKEN = "8758950547:AAFRBa1f31fZ0lJciyI05mcoCZYv16bf5hs"
 CHANNEL_CHAT_ID = "@Binary_Signals_Live_Malik"
 HISTORY_FILE = "trading_history.json"
 SCREENSHOT_FILE = "trade_result_chart.png"
 
-LIVE_PAIRS_MAP = {
-    "EURUSD": "EURUSD=X", "GBPUSD": "GBPUSD=X", "USDJPY": "USDJPY=X",
-    "USDCHF": "USDCHF=X", "USDCAD": "USDCAD=X", "AUDUSD": "AUDUSD=X", "NZDUSD": "NZDUSD=X",
-    "EURGBP": "EURGBP=X", "EURJPY": "EURJPY=X", "EURAUD": "EURAUD=X",
-    "EURCAD": "EURCAD=X", "EURNZD": "EURNZD=X", "EURCHF": "EURCHF=X",
-    "GBPJPY": "GBPJPY=X", "GBPAUD": "GBPAUD=X", "GBPCAD": "GBPCAD=X",
-    "GBPCHF": "GBPCHF=X", "GBPNZD": "GBPNZD=X", "AUDJPY": "AUDJPY=X",
-    "AUDCAD": "AUDCAD=X", "AUDNZD": "AUDNZD=X", "CADJPY": "CADJPY=X",
-    "CHFJPY": "CHFJPY=X", "NZDJPY": "NZDJPY=X", "NZDCAD": "NZDCAD=X"
+ACTIVE_PAIRS_POOL = {
+    "EURUSD": "EURUSD=X", "USDJPY": "USDJPY=X", 
+    "GBPUSD": "GBPUSD=X", "AUDCAD": "AUDCAD=X"
 }
 
-session_stats = {"total": 0, "wins": 0, "losses": 0}
+# Martingale Steps amounts & corresponding potential payouts (approx 85% payout)
+MTG_AMOUNTS = [2.0, 4.0, 9.0, 20.0, 45.0]
+MTG_PROFITS = [1.70, 3.40, 7.65, 17.00, 38.25] # Estimated profit on win (85%)
+
+session_stats = {"total": 0, "wins": 0, "losses": 0, "net_profit": 0.0}
 signals_in_session = 0
-is_mtg_pending = False
-pending_pair = None
-pending_direction = None
+
+pair_states = {pair: {"step": 0, "last_direction": None} for pair in ACTIVE_PAIRS_POOL.keys()}
 
 def load_history():
     if os.path.exists(HISTORY_FILE):
@@ -45,12 +42,13 @@ def load_history():
             pass
     return []
 
-def save_trade_to_db(is_win):
+def save_trade_to_db(is_win, amount):
     history = load_history()
     trade_record = {
         "timestamp": time.time(),
         "date": datetime.utcnow().strftime("%Y-%m-%d"),
-        "result": "WIN" if is_win else "LOSS"
+        "result": "WIN" if is_win else "LOSS",
+        "amount": amount
     }
     history.append(trade_record)
     try:
@@ -62,27 +60,31 @@ def save_trade_to_db(is_win):
 def get_stats_by_period(period_type):
     history = load_history()
     now = datetime.utcnow()
-    filtered_wins, filtered_losses = 0, 0
+    filtered_wins, filtered_losses, total_profit = 0, 0, 0.0
     for trade in history:
         try:
             trade_time = datetime.strptime(trade["date"], "%Y-%m-%d")
+            match = False
             if period_type == "day":
-                if trade["date"] == now.strftime("%Y-%m-%d"):
-                    if trade["result"] == "WIN": filtered_wins += 1
-                    else: filtered_losses += 1
+                if trade["date"] == now.strftime("%Y-%m-%d"): match = True
             elif period_type == "week":
-                if (now - trade_time).days <= 7:
-                    if trade["result"] == "WIN": filtered_wins += 1
-                    else: filtered_losses += 1
+                if (now - trade_time).days <= 7: match = True
             elif period_type == "month":
-                if (now - trade_time).days <= 30:
-                    if trade["result"] == "WIN": filtered_wins += 1
-                    else: filtered_losses += 1
+                if (now - trade_time).days <= 30: match = True
+                
+            if match:
+                amt = trade.get("amount", 2.0)
+                if trade["result"] == "WIN":
+                    filtered_wins += 1
+                    total_profit += (amt * 0.85)
+                else:
+                    filtered_losses += 1
+                    total_profit -= amt
         except:
             continue
     total = filtered_wins + filtered_losses
     accuracy = (filtered_wins / total * 100) if total > 0 else 0.0
-    return total, filtered_wins, filtered_losses, accuracy
+    return total, filtered_wins, filtered_losses, accuracy, total_profit
 
 def is_allowed_time_session():
     now_utc = datetime.utcnow()
@@ -187,19 +189,18 @@ def generate_trade_chart(df, pair, entry_price, exit_price, is_win):
         return False
 
 def get_all_pairs_status_text():
-    status_lines = ["📋 *LIVE PAIRS & CONDITIONS STATUS* 📋\n━━━━━━━━━━━━━━━━━━━━━━━━━"]
-    for pair, yf_symbol in LIVE_PAIRS_MAP.items():
+    status_lines = ["📋 *MULTI-PAIR 4-STEP MTG STATUS* 📋\n━━━━━━━━━━━━━━━━━━━━━━━━━"]
+    for pair, yf_symbol in ACTIVE_PAIRS_POOL.items():
         try:
             ticker = yf.Ticker(yf_symbol)
             df = ticker.history(period="1d", interval="1m", auto_adjust=True, timeout=5)
             if not df.empty and len(df) >= 10:
                 curr_price = float(df.iloc[-1]['Close'])
                 prev_price = float(df.iloc[-2]['Close'])
-                sup = float(df['Low'].tail(15).min())
-                res = float(df['High'].tail(15).max())
-                
                 trend = "🟢 BULLISH" if curr_price > prev_price else "🔴 BEARISH"
-                status_lines.append(f"• `#{pair}` ➔ Price: `{curr_price:.5f}` | {trend}\n  Support: `{sup:.5f}` | Res: `{res:.5f}`")
+                current_step = pair_states[pair]["step"]
+                current_stake = MTG_AMOUNTS[current_step]
+                status_lines.append(f"• `#{pair}` ➔ {trend}\n  Price: `{curr_price:.5f}` | MTG Step: `{current_step}` (Stake: `${current_stake}`)")
             else:
                 status_lines.append(f"• `#{pair}` ➔ `Syncing...`")
         except:
@@ -248,7 +249,8 @@ async def handle_telegram_callbacks():
                                 period = "month"
                                 title = "🗓️ LAST 30 DAYS RESULTS SUMMARY"
                                 
-                            total, wins, losses, acc = get_stats_by_period(period)
+                            total, wins, losses, acc, profit = get_stats_by_period(period)
+                            p_sign = "+" if profit >= 0 else ""
                             ans_text = (
                                 f"*{title}*\n"
                                 f"━━━━━━━━━━━━━━━━━━━\n"
@@ -256,6 +258,7 @@ async def handle_telegram_callbacks():
                                 f"✅ **Wins:** `{wins}`\n"
                                 f"❌ **Losses:** `{losses}`\n"
                                 f"📈 **Accuracy:** `{acc:.2f}%`\n"
+                                f"💰 **Net Profit:** `{p_sign}${profit:.2f}`\n"
                                 f"━━━━━━━━━━━━━━━━━━━"
                             )
                         
@@ -276,17 +279,14 @@ def get_market_data(yf_symbol):
         pass
     return None
 
-def analyze_support_resistance_loose(df_1m):
+def analyze_pair(df_1m):
     if df_1m is None or len(df_1m) < 15: return None
-    
-    # Range ko loose kar diya hai taake jaldi signal mil sakein
     support_level = df_1m['Low'].tail(15).min()
     resistance_level = df_1m['High'].tail(15).max()
     
     curr = df_1m.iloc[-1]
     entry_price = float(curr['Close'])
     
-    # 35% tak ka gap allow kiya hai
     near_support = abs(entry_price - support_level) <= (resistance_level - support_level) * 0.35
     near_resistance = abs(entry_price - resistance_level) <= (resistance_level - support_level) * 0.35
     
@@ -294,26 +294,29 @@ def analyze_support_resistance_loose(df_1m):
     is_red = curr['Close'] < curr['Open']
     
     if near_support and is_green:
-        return "CALL 🟢", entry_price, "Support Zone Rebound"
+        return "CALL 🟢", entry_price
     elif near_resistance and is_red:
-        return "PUT 🔻", entry_price, "Resistance Zone Rejection"
-        
+        return "PUT 🔻", entry_price
     return None
 
-async def execute_trade(pair, yf_symbol, direction, is_mtg=False):
-    global session_stats, signals_in_session, is_mtg_pending, pending_pair, pending_direction
+async def execute_trade(pair, yf_symbol, direction):
+    global session_stats, signals_in_session, pair_states
+    
+    current_step = pair_states[pair]["step"]
+    current_stake = MTG_AMOUNTS[current_step]
     
     df_pre = get_market_data(yf_symbol)
     if df_pre is None: return
     entry_num = float(df_pre.iloc[-1]['Close'])
     entry_str = f"{entry_num:.5f}"
     
-    title = "⚡ 1-STEP HEAVY MTG" if is_mtg else "💎 FATIMA FOREX FX - 1M SIGNAL"
+    title = f"⚡ 4-STEP MTG (STEP {current_step}) | STAKE: ${current_stake}" if current_step > 0 else "💎 FATIMA FOREX FX - 1M SIGNAL ($2)"
     base_msg = (
         f"**{title}**\n━━━━━━━━━━━━━━━━━━━━━━━━━\n"
         f"📊 **Asset:** `#{pair}`\n⏳ **Timeframe:** `1 Minute`\n"
         f"📈 **Direction:** `{direction}`\n"
         f"📍 **Entry Price:** `{entry_str}`\n"
+        f"💰 **Amount:** `${current_stake}`\n"
     )
     
     full_msg = base_msg + f"⏱️ **Timer:** `⏳ 60 Seconds Left...`\n━━━━━━━━━━━━━━━━━━━━━━━━━"
@@ -332,38 +335,36 @@ async def execute_trade(pair, yf_symbol, direction, is_mtg=False):
     
     is_win = True if ("CALL" in direction and exit_num > entry_num) or ("PUT" in direction and exit_num < entry_num) else False
     
-    if not is_mtg:
-        if is_win:
-            session_stats["total"] += 1
-            session_stats["wins"] += 1
-            signals_in_session += 1
-            is_mtg_pending = False
-            save_trade_to_db(True)
-            res_status = "✅ **WIN / ITM 🎯**"
-        else:
-            is_mtg_pending = True
-            pending_pair = pair
-            pending_direction = direction
-            res_status = "⚠️ **LOSS ➔ 1-Step MTG Triggered (Same Direction)...**"
+    session_stats["total"] += 1
+    signals_in_session += 1
+    
+    if is_win:
+        session_stats["wins"] += 1
+        profit_amt = current_stake * 0.85
+        session_stats["net_profit"] += profit_amt
+        save_trade_to_db(True, current_stake)
+        res_status = f"✅ **WIN / ITM 🎯 (+${profit_amt:.2f} Profit)**"
+        pair_states[pair]["step"] = 0
     else:
-        signals_in_session += 1
-        session_stats["total"] += 1
-        if is_win:
-            session_stats["wins"] += 1
-            is_mtg_pending = False
-            save_trade_to_db(True)
-            res_status = "✅ **MTG WIN / ITM 🎯**"
+        session_stats["losses"] += 1
+        session_stats["net_profit"] -= current_stake
+        save_trade_to_db(False, current_stake)
+        current_step += 1
+        if current_step >= len(MTG_AMOUNTS):
+            res_status = f"❌ **MAX MTG REACHED! Resetting to $2...**"
+            pair_states[pair]["step"] = 0
         else:
-            session_stats["losses"] += 1
-            is_mtg_pending = False
-            save_trade_to_db(False)
-            res_status = "❌ **MTG LOSS / OTM 🛑**"
+            res_status = f"⚠️ **LOSS (-${current_stake}) ➔ MTG Step {current_step} (${MTG_AMOUNTS[current_step]})**"
+            pair_states[pair]["step"] = current_step
+            pair_states[pair]["last_direction"] = direction
             
+    np_sign = "+" if session_stats["net_profit"] >= 0 else ""
     res_msg = (
         f"🏆 **FATIMA FOREX FX - RESULT** 🏆\n━━━━━━━━━━━━━━━━━━━━━━━━━\n"
         f"📊 **Asset:** `#{pair}`\n📍 **Entry:** `{entry_str}` | 🏁 **Exit:** `{exit_str}`\n"
         f"✨ **Status:** {res_status}\n━━━━━━━━━━━━━━━━━━━━━━━━━\n"
-        f"📊 *Progress* ➔ Signal: `{signals_in_session}`/10 | Wins: `{session_stats['wins']}` | Losses: `{session_stats['losses']}`"
+        f"📊 *Progress* ➔ Signals: `{signals_in_session}` | Wins: `{session_stats['wins']}` | Losses: `{session_stats['losses']}`\n"
+        f"💰 *Session Profit:* `{np_sign}${session_stats['net_profit']:.2f}`"
     )
     
     if df_post is not None:
@@ -373,26 +374,27 @@ async def execute_trade(pair, yf_symbol, direction, is_mtg=False):
         else:
             send_telegram_message_with_result_buttons(res_msg)
     else:
-            send_telegram_message_with_result_buttons(res_msg)
+        send_telegram_message_with_result_buttons(res_msg)
 
-    if signals_in_session >= 10:
+    if signals_in_session >= 15:
         tot, w, l = session_stats["total"], session_stats["wins"], session_stats["losses"]
         acc = (w / tot * 100) if tot > 0 else 0
+        np_sign_sum = "+" if session_stats["net_profit"] >= 0 else ""
         summary = (
             f"🎯 **SESSION SUMMARY** 🎯\n━━━━━━━━━━━━━━━━━━━━━━━━━\n"
             f"🎯 **Total:** `{signals_in_session}` | ✅ **Wins:** `{w}` | ❌ **Losses:** `{l}`\n"
-            f"📈 **Accuracy:** `{acc:.2f}%`\n━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+            f"📈 **Accuracy:** `{acc:.2f}%`\n"
+            f"💰 **Total Net Profit:** `{np_sign_sum}${session_stats['net_profit']:.2f}`\n━━━━━━━━━━━━━━━━━━━━━━━━━\n"
             f"🛑 **Taking a 5 minutes break!**"
         )
         send_telegram_simple_message(summary)
         signals_in_session = 0
-        session_stats = {"total": 0, "wins": 0, "losses": 0}
+        session_stats = {"total": 0, "wins": 0, "losses": 0, "net_profit": 0.0}
         await asyncio.sleep(300)
         send_telegram_simple_message("🚀 **SESSION RESUMED!**")
 
 async def main():
-    global is_mtg_pending, pending_pair, pending_direction
-    print("Bot Active with Flexible Strategy...")
+    print("Multi-Pair 4-Step MTG Bot Active with Profit Tracking...")
     asyncio.create_task(handle_telegram_callbacks())
     
     while True:
@@ -401,26 +403,27 @@ async def main():
                 await asyncio.sleep(60)
                 continue
                 
-            if is_mtg_pending and pending_pair:
-                yf_sym = LIVE_PAIRS_MAP.get(pending_pair)
-                await execute_trade(pending_pair, yf_sym, pending_direction, is_mtg=True)
-                is_mtg_pending = False
-                pending_pair = None
-                pending_direction = None
-                await asyncio.sleep(20)
-                continue
-
             signal_found = False
-            for pair, yf_symbol in LIVE_PAIRS_MAP.items():
+            for pair, yf_symbol in ACTIVE_PAIRS_POOL.items():
                 df_1m = get_market_data(yf_symbol)
-                res = analyze_support_resistance_loose(df_1m)
                 
-                if res:
-                    direction, _, _ = res
-                    await execute_trade(pair, yf_symbol, direction, is_mtg=False)
+                current_step = pair_states[pair]["step"]
+                
+                if current_step > 0:
+                    direction = pair_states[pair]["last_direction"]
+                    await execute_trade(pair, yf_symbol, direction)
                     signal_found = True
                     await asyncio.sleep(15)
                     break
+                else:
+                    res = analyze_pair(df_1m)
+                    if res:
+                        direction, _ = res
+                        pair_states[pair]["last_direction"] = direction
+                        await execute_trade(pair, yf_symbol, direction)
+                        signal_found = True
+                        await asyncio.sleep(15)
+                        break
                     
             if not signal_found:
                 await asyncio.sleep(10)
