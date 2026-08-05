@@ -10,7 +10,7 @@ from datetime import datetime, timedelta
 from playwright.async_api import async_playwright
 
 # ==========================================
-# ⚙️ ULTIMATE PRO BOT CONFIGURATION (2-MIN TIMEFRAME)
+# ⚙️ ULTIMATE SCHEDULED BOT CONFIGURATION
 # ==========================================
 TELEGRAM_BOT_TOKEN = "8758950547:AAFRBa1f31fZ0lJciyI05mcoCZYv16bf5hs"
 CHANNEL_CHAT_ID = "@Binary_Signals_Live_Malik"
@@ -39,7 +39,6 @@ def check_forex_news_events():
         if response.status_code == 200:
             events = response.json()
             now_utc = datetime.utcnow()
-            
             for event in events:
                 if event.get("impact") == "High":
                     date_str = event.get("date")
@@ -80,7 +79,6 @@ def get_stats_by_period(period_type):
     history = load_history()
     now = datetime.utcnow()
     filtered_wins, filtered_losses = 0, 0
-    
     for trade in history:
         try:
             trade_time = datetime.strptime(trade["date"], "%Y-%m-%d")
@@ -98,20 +96,11 @@ def get_stats_by_period(period_type):
                     else: filtered_losses += 1
         except:
             continue
-                
     total = filtered_wins + filtered_losses
     accuracy = (filtered_wins / total * 100) if total > 0 else 0.0
     return total, filtered_wins, filtered_losses, accuracy
 
-def is_london_newyork_session():
-    now_utc = datetime.utcnow()
-    pk_time = now_utc + timedelta(hours=5)
-    current_hour = pk_time.hour
-    if 12 <= current_hour < 22:
-        return True
-    return False
-
-def send_telegram_message_with_result_buttons(text, pair):
+def send_telegram_message_with_result_buttons(text):
     url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
     inline_keyboard = {
         "inline_keyboard": [
@@ -144,7 +133,7 @@ def send_telegram_simple_message(text):
     except Exception as e:
         print(f"Telegram Message Error: {e}")
 
-def send_telegram_photo_with_result_buttons(photo_path, caption, pair):
+def send_telegram_photo_with_result_buttons(photo_path, caption):
     url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendPhoto"
     inline_keyboard = {
         "inline_keyboard": [
@@ -216,7 +205,6 @@ async def handle_telegram_callbacks():
                                 title = "🗓️ LAST 30 DAYS RESULTS SUMMARY"
                                 
                             total, wins, losses, acc = get_stats_by_period(period)
-                            
                             ans_text = (
                                 f"*{title}*\n"
                                 f"━━━━━━━━━━━━━━━━━━━\n"
@@ -238,7 +226,6 @@ async def capture_chart(pair: str, output_path: str):
     async with async_playwright() as p:
         browser = await p.chromium.launch(headless=True)
         page = await browser.new_page(viewport={"width": 1200, "height": 750})
-        # 2-minute interval set kiya gaya hai TradingView URL mein
         url = f"https://s.tradingview.com/widgetembed/?symbol=FX:{pair}&interval=2&hidesidetoolbar=1&symboledit=0&saveimage=0&toolbarbg=F1F3F6&studies=[]&theme=dark&style=1"
         try:
             await page.goto(url, wait_until="networkidle", timeout=30000)
@@ -263,6 +250,19 @@ def get_market_data(yf_symbol):
         df_1h = ticker.history(period="3d", interval="1h", auto_adjust=True, timeout=10)
         
         if not df_2m.empty and len(df_2m) >= 20:
+            # --- VOLATILITY FILTER (ATR Check) ---
+            df_2m['tr'] = np.maximum(df_2m['High'] - df_2m['Low'], 
+                                     np.maximum(abs(df_2m['High'] - df_2m['Close'].shift(1)), 
+                                                abs(df_2m['Low'] - df_2m['Close'].shift(1))))
+            df_2m['atr'] = df_2m['tr'].rolling(window=14).mean()
+            current_atr = df_2m['atr'].iloc[-1]
+            avg_price = df_2m['Close'].iloc[-1]
+            
+            # Agar volatility limit se zyada ho toh pair skip karne ke liye flag return karein
+            is_too_volatile = (current_atr / avg_price) > 0.0035  # High volatility threshold
+            if is_too_volatile:
+                return None, None, True
+
             df_2m['rsi'] = calculate_rsi(df_2m['Close'], 14)
             candles = []
             for i in range(-5, 0):
@@ -279,10 +279,10 @@ def get_market_data(yf_symbol):
                 ma_slow = df_1h['Close'].rolling(window=20).mean().iloc[-1]
                 if ma_fast > ma_slow: trend_1h = "BULLISH"
                 elif ma_fast < ma_slow: trend_1h = "BEARISH"
-            return candles, trend_1h
+            return candles, trend_1h, False
     except:
         pass
-    return None, None
+    return None, None, False
 
 def analyze_multi_strategies(candles, trend_1h, is_mtg):
     if not candles or len(candles) < 2: return None
@@ -314,16 +314,6 @@ def analyze_multi_strategies(candles, trend_1h, is_mtg):
             tag = "🔥 1-STEP HEAVY MTG (Bearish Engulfing)" if is_mtg else "📉 Bearish Engulfing Pattern"
             return (tag, "PUT 🔻", f"{entry_price:.5f}", "💎 VIP 99% (MTG)" if is_mtg else "🔥 PRO 88%+", entry_price)
 
-    upper_wick = curr_candle['high'] - max(curr_candle['open'], curr_candle['close'])
-    lower_wick = min(curr_candle['open'], curr_candle['close']) - curr_candle['low']
-    
-    if upper_wick > (curr_body * 2) and rsi_val >= 80:
-        tag = "🔥 1-STEP HEAVY MTG (Pin Bar Rejection)" if is_mtg else "🔻 Top Rejection Pin Bar"
-        return (tag, "PUT 🔻", f"{entry_price:.5f}", "💎 VIP 99% (MTG)" if is_mtg else "🔥 PRO 90%+", entry_price)
-    elif lower_wick > (curr_body * 2) and rsi_val <= 20:
-        tag = "🔥 1-STEP HEAVY MTG (Pin Bar Rejection)" if is_mtg else "🟢 Bottom Rejection Pin Bar"
-        return (tag, "CALL 🟢", f"{entry_price:.5f}", "💎 VIP 99% (MTG)" if is_mtg else "🔥 PRO 90%+", entry_price)
-
     return None
 
 async def process_signal(pair: str, yf_symbol: str, pattern: str, direction: str, entry_str: str, strength: str, entry_num: float):
@@ -344,15 +334,15 @@ async def process_signal(pair: str, yf_symbol: str, pattern: str, direction: str
     )
     
     if os.path.exists(live_img):
-        send_telegram_photo_with_result_buttons(live_img, signal_msg, pair)
+        send_telegram_photo_with_result_buttons(live_img, signal_msg)
         try: os.remove(live_img)
         except: pass
     else:
-        send_telegram_message_with_result_buttons(signal_msg, pair)
+        send_telegram_message_with_result_buttons(signal_msg)
 
     # Wait for 1st trade expiry (2 minutes = 120 seconds)
     await asyncio.sleep(120)
-    candles_after, _ = get_market_data(yf_symbol)
+    candles_after, _, _ = get_market_data(yf_symbol)
     exit_num = candles_after[-1]['close'] if candles_after and len(candles_after) > 0 else entry_num
     
     is_first_win = True if ("CALL" in direction and exit_num > entry_num) or ("PUT" in direction and exit_num < entry_num) else False
@@ -376,11 +366,11 @@ async def process_signal(pair: str, yf_symbol: str, pattern: str, direction: str
             f"📊 *Progress* ➔ Signal: `{signals_in_session}`/10 | Wins: `{session_stats['wins']}` | Losses: `{session_stats['losses']}`"
         )
         if os.path.exists(result_img):
-            send_telegram_photo_with_result_buttons(result_img, result_msg, pair)
+            send_telegram_photo_with_result_buttons(result_img, result_msg)
             try: os.remove(result_img)
             except: pass
         else:
-            send_telegram_message_with_result_buttons(result_msg, pair)
+            send_telegram_message_with_result_buttons(result_msg)
 
     # --- Agar 1st Trade LOSS ho jaye, toh 1-Step MTG ka wait karein ---
     else:
@@ -388,9 +378,8 @@ async def process_signal(pair: str, yf_symbol: str, pattern: str, direction: str
         mtg_entry_num = exit_num
         mtg_entry_str = f"{mtg_entry_num:.5f}"
         
-        # MTG trade ka wait (2 minutes expiry = 120 seconds)
         await asyncio.sleep(120)
-        candles_mtg, _ = get_market_data(yf_symbol)
+        candles_mtg, _, _ = get_market_data(yf_symbol)
         mtg_exit_num = candles_mtg[-1]['close'] if candles_mtg and len(candles_mtg) > 0 else mtg_entry_num
         
         is_mtg_win = True if ("CALL" in direction and mtg_exit_num > mtg_entry_num) or ("PUT" in direction and mtg_exit_num < mtg_entry_num) else False
@@ -417,33 +406,73 @@ async def process_signal(pair: str, yf_symbol: str, pattern: str, direction: str
             f"📊 *Progress* ➔ Signal: `{signals_in_session}`/10 | Wins: `{session_stats['wins']}` | Losses: `{session_stats['losses']}`"
         )
         if os.path.exists(result_img):
-            send_telegram_photo_with_result_buttons(result_img, result_msg, pair)
+            send_telegram_photo_with_result_buttons(result_img, result_msg)
             try: os.remove(result_img)
             except: pass
         else:
-            send_telegram_message_with_result_buttons(result_msg, pair)
+            send_telegram_message_with_result_buttons(result_msg)
 
-    # Session limit check
+    # 10 signals baad sirf 10 minutes break (Text summary khatam kar di gayi hai)
     if signals_in_session >= 10:
-        total_t, wins_t, losses_t = session_stats["total"], session_stats["wins"], session_stats["losses"]
-        accuracy = (wins_t / total_t * 100) if total_t > 0 else 0
-        summary_msg = (
-            f"🎯 **1 HOUR SESSION SUMMARY** 🎯\n━━━━━━━━━━━━━━━━━━━━━━━━━\n"
-            f"🎯 **Total:** `{signals_in_session}` | ✅ **Wins:** `{wins_t}` | ❌ **Losses:** `{losses_t}`\n"
-            f"📈 **Accuracy:** `{accuracy:.2f}%`\n━━━━━━━━━━━━━━━━━━━━━━━━━\n"
-            f"🛑 **Taking a 10 minutes break!**"
-        )
-        send_telegram_simple_message(summary_msg)
+        send_telegram_simple_message("🛑 **10 Signals completed! Taking a 10 minutes break...**")
         signals_in_session = 0
         session_stats = {"total": 0, "wins": 0, "losses": 0, "consecutive_losses": 0}
         await asyncio.sleep(600)
-        send_telegram_simple_message("🚀 **SESSION RESUMED!**")
+        send_telegram_simple_message("🚀 **Break over! Session Resumed.**")
+
+async def time_scheduler():
+    """Exact times par messages bhejne ke liye background scheduler"""
+    sent_900, sent_915, sent_930, sent_1000, sent_1015 = False, False, False, False, False
+    while True:
+        now_pk = datetime.utcnow() + timedelta(hours=5)
+        current_time_str = now_pk.strftime("%H:%M")
+        
+        # Reset flags at midnight
+        if current_time_str == "00:00":
+            sent_900, sent_915, sent_930, sent_1000, sent_1015 = False, False, False, False, False
+            
+        if current_time_str == "21:00" and not sent_900:
+            send_telegram_simple_message("🌙 **SESSION CLOSE**\nAaj ki trading session mukammal ho chuki hai. Allah Hafiz!")
+            sent_900 = True
+        elif current_time_str == "21:15" and not sent_915:
+            total, wins, losses, acc = get_stats_by_period("day")
+            summary_text = (
+                f"📊 **TODAY'S FINAL RESULTS SUMMARY** 📊\n"
+                f"━━━━━━━━━━━━━━━━━━━\n"
+                f"🎯 **Total Signals:** `{total}`\n"
+                f"✅ **Wins:** `{wins}`\n"
+                f"❌ **Losses:** `{losses}`\n"
+                f"📈 **Accuracy:** `{acc:.2f}%`\n"
+                f"━━━━━━━━━━━━━━━━━━━"
+            )
+            send_telegram_message_with_result_buttons(summary_text)
+            sent_915 = True
+        elif current_time_str == "21:30" and not sent_930:
+            send_telegram_simple_message("✨ **GOOD NIGHT!**\nAaj ka din behtareen raha, kal subha phir milte hain. 😴💤")
+            sent_930 = True
+        elif current_time_str == "10:00" and not sent_1000:
+            send_telegram_simple_message("☀️ **GOOD MORNING!**\nSubha bakhair! Sab tayyar ho jayein naye din ki trading ke liye. ☕📈")
+            sent_1000 = True
+        elif current_time_str == "10:15" and not sent_1015:
+            send_telegram_simple_message("🚀 **SESSION START!**\nLive trading signals shuru ho rahe hain. Best of luck! 💎")
+            sent_1015 = True
+            
+        await asyncio.sleep(30)
 
 async def main():
-    print("Fatima Forex FX Bot Active with 2-Minute Timeframe...")
+    print("Fatima Forex FX Bot Active with Volatility Filter & Time Schedule...")
     asyncio.create_task(handle_telegram_callbacks())
+    asyncio.create_task(time_scheduler())
     
     while True:
+        now_pk = datetime.utcnow() + timedelta(hours=5)
+        current_hour = now_pk.hour
+        
+        # Subha 10 baje se raat 9 baje tak trading session active rahega
+        if not (10 <= current_hour < 21):
+            await asyncio.sleep(60)
+            continue
+
         has_news, news_title, news_currency = check_forex_news_events()
         if has_news:
             news_alert_msg = (
@@ -454,27 +483,26 @@ async def main():
                 f"🛑 **Bot Status:** Paused for safety (High Volatility Ahead).\n"
                 f"━━━━━━━━━━━━━━━━━━━━━━━━━"
             )
-            print(f"News Alert Sent: {news_title}")
             send_telegram_simple_message(news_alert_msg)
             await asyncio.sleep(1800)
-            continue
-
-        if not is_london_newyork_session():
-            print(f"[{datetime.now().strftime('%H:%M:%S')}] Outside London/New York Session. Waiting...", end="\r")
-            await asyncio.sleep(60)
             continue
 
         signal_found = False
         for pair, yf_symbol in LIVE_PAIRS_MAP.items():
             print(f"Scanning Active Session -> {pair}                    ", end="\r")
-            candles, trend_1h = get_market_data(yf_symbol)
-            signal = analyze_multi_strategies(candles, trend_1h, False)
+            candles, trend_1h, is_volatile = get_market_data(yf_symbol)
             
+            # Agar pair volatile ho toh skip kar do
+            if is_volatile:
+                print(f"Skipping {pair} due to high volatility.")
+                continue
+                
+            signal = analyze_multi_strategies(candles, trend_1h, False)
             if signal:
                 pattern, direction, entry_str, strength, entry_num = signal
                 await process_signal(pair, yf_symbol, pattern, direction, entry_str, strength, entry_num)
                 signal_found = True
-                await asyncio.sleep(300)
+                await asyncio.sleep(300)  # 5 minutes gap between signals
                 break  
                 
         if not signal_found:
