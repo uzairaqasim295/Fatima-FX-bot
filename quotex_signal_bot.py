@@ -10,7 +10,7 @@ from datetime import datetime, timedelta
 from playwright.async_api import async_playwright
 
 # ==========================================
-# ⚙️ ULTIMATE PRO BOT CONFIGURATION (WITH MTG FIX)
+# ⚙️ ULTIMATE PRO BOT CONFIGURATION (2-MIN TIMEFRAME)
 # ==========================================
 TELEGRAM_BOT_TOKEN = "8758950547:AAFRBa1f31fZ0lJciyI05mcoCZYv16bf5hs"
 CHANNEL_CHAT_ID = "@Binary_Signals_Live_Malik"
@@ -238,7 +238,8 @@ async def capture_chart(pair: str, output_path: str):
     async with async_playwright() as p:
         browser = await p.chromium.launch(headless=True)
         page = await browser.new_page(viewport={"width": 1200, "height": 750})
-        url = f"https://s.tradingview.com/widgetembed/?symbol=FX:{pair}&interval=5&hidesidetoolbar=1&symboledit=0&saveimage=0&toolbarbg=F1F3F6&studies=[]&theme=dark&style=1"
+        # 2-minute interval set kiya gaya hai TradingView URL mein
+        url = f"https://s.tradingview.com/widgetembed/?symbol=FX:{pair}&interval=2&hidesidetoolbar=1&symboledit=0&saveimage=0&toolbarbg=F1F3F6&studies=[]&theme=dark&style=1"
         try:
             await page.goto(url, wait_until="networkidle", timeout=30000)
             await asyncio.sleep(2)
@@ -258,14 +259,14 @@ def calculate_rsi(series, period=14):
 def get_market_data(yf_symbol):
     try:
         ticker = yf.Ticker(yf_symbol)
-        df_5m = ticker.history(period="3d", interval="5m", auto_adjust=True, timeout=10)
+        df_2m = ticker.history(period="3d", interval="2m", auto_adjust=True, timeout=10)
         df_1h = ticker.history(period="3d", interval="1h", auto_adjust=True, timeout=10)
         
-        if not df_5m.empty and len(df_5m) >= 20:
-            df_5m['rsi'] = calculate_rsi(df_5m['Close'], 14)
+        if not df_2m.empty and len(df_2m) >= 20:
+            df_2m['rsi'] = calculate_rsi(df_2m['Close'], 14)
             candles = []
             for i in range(-5, 0):
-                row = df_5m.iloc[i]
+                row = df_2m.iloc[i]
                 candles.append({
                     'open': float(row['Open']), 'high': float(row['High']),
                     'low': float(row['Low']), 'close': float(row['Close']),
@@ -296,12 +297,12 @@ def analyze_multi_strategies(candles, trend_1h, is_mtg):
     
     if curr_candle['close'] > curr_candle['open'] and is_strong_body:
         if curr_candle['close'] > prev_candle['high'] and trend_1h == "BULLISH" and (40 <= rsi_val <= 65):
-            tag = "🔥 1-STEP HEAVY MTG (Breakout)" if is_mtg else "🎯 5M High Breakout"
+            tag = "🔥 1-STEP HEAVY MTG (Breakout)" if is_mtg else "🎯 2M High Breakout"
             return (tag, "CALL 🟢", f"{entry_price:.5f}", "💎 VIP 99% (MTG)" if is_mtg else "🔥 PRO 85%+", entry_price)
 
     elif curr_candle['close'] < curr_candle['open'] and is_strong_body:
         if curr_candle['close'] < prev_candle['low'] and trend_1h == "BEARISH" and (35 <= rsi_val <= 60):
-            tag = "🔥 1-STEP HEAVY MTG (Breakout)" if is_mtg else "🎯 5M Low Breakout"
+            tag = "🔥 1-STEP HEAVY MTG (Breakout)" if is_mtg else "🎯 2M Low Breakout"
             return (tag, "PUT 🔻", f"{entry_price:.5f}", "💎 VIP 99% (MTG)" if is_mtg else "🔥 PRO 85%+", entry_price)
 
     prev_body = abs(prev_candle['close'] - prev_candle['open'])
@@ -335,7 +336,7 @@ async def process_signal(pair: str, yf_symbol: str, pattern: str, direction: str
     await capture_chart(pair, live_img)
     signal_msg = (
         f"**💎 FATIMA FOREX FX - PRO SESSION ALERT**\n━━━━━━━━━━━━━━━━━━━━━━━━━\n"
-        f"📊 **Asset:** `#{pair}`\n⏳ **Timeframe:** `5 Minutes`\n"
+        f"📊 **Asset:** `#{pair}`\n⏳ **Timeframe:** `2 Minutes`\n"
         f"🎯 **Pattern:** `{pattern}`\n📈 **Direction:** `{direction}`\n"
         f"📍 **Entry:** `{entry_str}`\n💪 **Accuracy:** `{strength}`\n"
         f"⏱️ **Expiry:** `Exact 2 Minutes`\n"
@@ -349,7 +350,7 @@ async def process_signal(pair: str, yf_symbol: str, pattern: str, direction: str
     else:
         send_telegram_message_with_result_buttons(signal_msg, pair)
 
-    # Wait for 1st trade expiry
+    # Wait for 1st trade expiry (2 minutes = 120 seconds)
     await asyncio.sleep(120)
     candles_after, _ = get_market_data(yf_symbol)
     exit_num = candles_after[-1]['close'] if candles_after and len(candles_after) > 0 else entry_num
@@ -387,7 +388,7 @@ async def process_signal(pair: str, yf_symbol: str, pattern: str, direction: str
         mtg_entry_num = exit_num
         mtg_entry_str = f"{mtg_entry_num:.5f}"
         
-        # MTG trade ka wait (2 minutes expiry)
+        # MTG trade ka wait (2 minutes expiry = 120 seconds)
         await asyncio.sleep(120)
         candles_mtg, _ = get_market_data(yf_symbol)
         mtg_exit_num = candles_mtg[-1]['close'] if candles_mtg and len(candles_mtg) > 0 else mtg_entry_num
@@ -439,7 +440,7 @@ async def process_signal(pair: str, yf_symbol: str, pattern: str, direction: str
         send_telegram_simple_message("🚀 **SESSION RESUMED!**")
 
 async def main():
-    print("Fatima Forex FX Bot Active with Callback-based Admin Portal & News Filter...")
+    print("Fatima Forex FX Bot Active with 2-Minute Timeframe...")
     asyncio.create_task(handle_telegram_callbacks())
     
     while True:
