@@ -10,7 +10,7 @@ from datetime import datetime, timedelta
 from playwright.async_api import async_playwright
 
 # ==========================================
-# ⚙️ ULTIMATE SCHEDULED BOT CONFIGURATION
+# ⚙️ ULTIMATE SCHEDULED BOT CONFIGURATION (DIRECT VS MTG)
 # ==========================================
 TELEGRAM_BOT_TOKEN = "8758950547:AAFRBa1f31fZ0lJciyI05mcoCZYv16bf5hs"
 CHANNEL_CHAT_ID = "@Binary_Signals_Live_Malik"
@@ -27,7 +27,7 @@ LIVE_PAIRS_MAP = {
     "CHFJPY": "CHFJPY=X", "NZDJPY": "NZDJPY=X", "NZDCAD": "NZDCAD=X"
 }
 
-session_stats = {"total": 0, "wins": 0, "losses": 0, "consecutive_losses": 0}
+session_stats = {"total": 0, "direct_wins": 0, "mtg_wins": 0, "losses": 0, "consecutive_losses": 0}
 signals_in_session = 0
 is_news_break_active = False
 
@@ -61,12 +61,13 @@ def load_history():
             pass
     return []
 
-def save_trade_to_db(is_win):
+def save_trade_to_db(result_type):
+    # result_type: "DIRECT_WIN", "MTG_WIN", "LOSS"
     history = load_history()
     trade_record = {
         "timestamp": time.time(),
         "date": datetime.utcnow().strftime("%Y-%m-%d"),
-        "result": "WIN" if is_win else "LOSS"
+        "result": result_type
     }
     history.append(trade_record)
     try:
@@ -78,27 +79,29 @@ def save_trade_to_db(is_win):
 def get_stats_by_period(period_type):
     history = load_history()
     now = datetime.utcnow()
-    filtered_wins, filtered_losses = 0, 0
+    d_wins, m_wins, losses = 0, 0, 0
     for trade in history:
         try:
             trade_time = datetime.strptime(trade["date"], "%Y-%m-%d")
+            match = False
             if period_type == "day":
-                if trade["date"] == now.strftime("%Y-%m-%d"):
-                    if trade["result"] == "WIN": filtered_wins += 1
-                    else: filtered_losses += 1
+                if trade["date"] == now.strftime("%Y-%m-%d"): match = True
             elif period_type == "week":
-                if (now - trade_time).days <= 7:
-                    if trade["result"] == "WIN": filtered_wins += 1
-                    else: filtered_losses += 1
+                if (now - trade_time).days <= 7: match = True
             elif period_type == "month":
-                if (now - trade_time).days <= 30:
-                    if trade["result"] == "WIN": filtered_wins += 1
-                    else: filtered_losses += 1
+                if (now - trade_time).days <= 30: match = True
+                
+            if match:
+                res = trade["result"]
+                if res == "DIRECT_WIN": d_wins += 1
+                elif res == "MTG_WIN": m_wins += 1
+                elif res == "LOSS": losses += 1
         except:
             continue
-    total = filtered_wins + filtered_losses
-    accuracy = (filtered_wins / total * 100) if total > 0 else 0.0
-    return total, filtered_wins, filtered_losses, accuracy
+    total_wins = d_wins + m_wins
+    total = total_wins + losses
+    accuracy = (total_wins / total * 100) if total > 0 else 0.0
+    return total, d_wins, m_wins, losses, accuracy
 
 def send_telegram_message_with_result_buttons(text):
     url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
@@ -204,12 +207,15 @@ async def handle_telegram_callbacks():
                                 period = "month"
                                 title = "🗓️ LAST 30 DAYS RESULTS SUMMARY"
                                 
-                            total, wins, losses, acc = get_stats_by_period(period)
+                            total, d_wins, m_wins, losses, acc = get_stats_by_period(period)
+                            t_wins = d_wins + m_wins
                             ans_text = (
                                 f"*{title}*\n"
                                 f"━━━━━━━━━━━━━━━━━━━\n"
                                 f"🎯 **Total Signals:** `{total}`\n"
-                                f"✅ **Wins:** `{wins}`\n"
+                                f"⭐ **Direct Wins (Shureshot):** `{d_wins}`\n"
+                                f"✅ **MTG Wins:** `{m_wins}`\n"
+                                f"🏆 **Total Wins:** `{t_wins}`\n"
                                 f"❌ **Losses:** `{losses}`\n"
                                 f"📈 **Accuracy:** `{acc:.2f}%`\n"
                                 f"━━━━━━━━━━━━━━━━━━━"
@@ -250,7 +256,6 @@ def get_market_data(yf_symbol):
         df_1h = ticker.history(period="3d", interval="1h", auto_adjust=True, timeout=10)
         
         if not df_2m.empty and len(df_2m) >= 20:
-            # --- VOLATILITY FILTER (ATR Check) ---
             df_2m['tr'] = np.maximum(df_2m['High'] - df_2m['Low'], 
                                      np.maximum(abs(df_2m['High'] - df_2m['Close'].shift(1)), 
                                                 abs(df_2m['Low'] - df_2m['Close'].shift(1))))
@@ -258,9 +263,7 @@ def get_market_data(yf_symbol):
             current_atr = df_2m['atr'].iloc[-1]
             avg_price = df_2m['Close'].iloc[-1]
             
-            # Agar volatility limit se zyada ho toh pair skip karne ke liye flag return karein
-            is_too_volatile = (current_atr / avg_price) > 0.0035  # High volatility threshold
-            if is_too_volatile:
+            if (current_atr / avg_price) > 0.0035:
                 return None, None, True
 
             df_2m['rsi'] = calculate_rsi(df_2m['Close'], 14)
@@ -340,22 +343,21 @@ async def process_signal(pair: str, yf_symbol: str, pattern: str, direction: str
     else:
         send_telegram_message_with_result_buttons(signal_msg)
 
-    # Wait for 1st trade expiry (2 minutes = 120 seconds)
     await asyncio.sleep(120)
     candles_after, _, _ = get_market_data(yf_symbol)
     exit_num = candles_after[-1]['close'] if candles_after and len(candles_after) > 0 else entry_num
     
     is_first_win = True if ("CALL" in direction and exit_num > entry_num) or ("PUT" in direction and exit_num < entry_num) else False
 
-    # --- Agar 1st Trade WIN ho jaye ---
+    # --- DIRECT WIN (SHURESHOT) ---
     if is_first_win:
         session_stats["total"] += 1
         signals_in_session += 1
-        session_stats["wins"] += 1
+        session_stats["direct_wins"] += 1
         session_stats["consecutive_losses"] = 0
-        save_trade_to_db(True)
+        save_trade_to_db("DIRECT_WIN")
         
-        result_status = "✅ **WIN / ITM 🎯**"
+        result_status = "🎯 **DIRECT WIN / SHURESHOT ⭐**"
         exit_str = f"{exit_num:.5f}"
         
         await capture_chart(pair, result_img)
@@ -363,7 +365,7 @@ async def process_signal(pair: str, yf_symbol: str, pattern: str, direction: str
             f"🏆 **FATIMA FOREX FX - RESULT** 🏆\n━━━━━━━━━━━━━━━━━━━━━━━━━\n"
             f"📊 **Asset:** `#{pair}`\n📍 **Entry:** `{entry_str}` | 🏁 **Exit:** `{exit_str}`\n"
             f"✨ **Status:** {result_status}\n━━━━━━━━━━━━━━━━━━━━━━━━━\n"
-            f"📊 *Progress* ➔ Signal: `{signals_in_session}`/10 | Wins: `{session_stats['wins']}` | Losses: `{session_stats['losses']}`"
+            f"📊 *Progress* ➔ Signal: `{signals_in_session}`/10 | Direct Wins: `{session_stats['direct_wins']}` | MTG Wins: `{session_stats['mtg_wins']}` | Losses: `{session_stats['losses']}`"
         )
         if os.path.exists(result_img):
             send_telegram_photo_with_result_buttons(result_img, result_msg)
@@ -371,9 +373,8 @@ async def process_signal(pair: str, yf_symbol: str, pattern: str, direction: str
             except: pass
         else:
             send_telegram_message_with_result_buttons(result_msg)
-
-    # --- Agar 1st Trade LOSS ho jaye, toh 1-Step MTG ka wait karein ---
     else:
+        # --- MTG TRADE ---
         print(f"[{pair}] 1st Trade Loss! Waiting for 1-Step MTG result...")
         mtg_entry_num = exit_num
         mtg_entry_str = f"{mtg_entry_num:.5f}"
@@ -386,15 +387,16 @@ async def process_signal(pair: str, yf_symbol: str, pattern: str, direction: str
         
         session_stats["total"] += 1
         signals_in_session += 1
-        save_trade_to_db(is_mtg_win)
         
         if is_mtg_win:
-            session_stats["wins"] += 1
+            session_stats["mtg_wins"] += 1
             session_stats["consecutive_losses"] = 0
+            save_trade_to_db("MTG_WIN")
             result_status = "✅ **MTG WIN / ITM 🎯**"
         else:
             session_stats["losses"] += 1
             session_stats["consecutive_losses"] += 1
+            save_trade_to_db("LOSS")
             result_status = "❌ **MTG LOSS / OTM 🛑**"
             
         mtg_exit_str = f"{mtg_exit_num:.5f}"
@@ -403,7 +405,7 @@ async def process_signal(pair: str, yf_symbol: str, pattern: str, direction: str
             f"🏆 **FATIMA FOREX FX - MTG RESULT** 🏆\n━━━━━━━━━━━━━━━━━━━━━━━━━\n"
             f"📊 **Asset:** `#{pair}`\n📍 **MTG Entry:** `{mtg_entry_str}` | 🏁 **Exit:** `{mtg_exit_str}`\n"
             f"✨ **Status:** {result_status}\n━━━━━━━━━━━━━━━━━━━━━━━━━\n"
-            f"📊 *Progress* ➔ Signal: `{signals_in_session}`/10 | Wins: `{session_stats['wins']}` | Losses: `{session_stats['losses']}`"
+            f"📊 *Progress* ➔ Signal: `{signals_in_session}`/10 | Direct Wins: `{session_stats['direct_wins']}` | MTG Wins: `{session_stats['mtg_wins']}` | Losses: `{session_stats['losses']}`"
         )
         if os.path.exists(result_img):
             send_telegram_photo_with_result_buttons(result_img, result_msg)
@@ -412,55 +414,55 @@ async def process_signal(pair: str, yf_symbol: str, pattern: str, direction: str
         else:
             send_telegram_message_with_result_buttons(result_msg)
 
-    # 10 signals baad sirf 10 minutes break (Text summary khatam kar di gayi hai)
     if signals_in_session >= 10:
         send_telegram_simple_message("🛑 **10 Signals completed! Taking a 10 minutes break...**")
         signals_in_session = 0
-        session_stats = {"total": 0, "wins": 0, "losses": 0, "consecutive_losses": 0}
+        session_stats = {"total": 0, "direct_wins": 0, "mtg_wins": 0, "losses": 0, "consecutive_losses": 0}
         await asyncio.sleep(600)
         send_telegram_simple_message("🚀 **Break over! Session Resumed.**")
 
 async def time_scheduler():
-    """Exact times par messages bhejne ke liye background scheduler"""
-    sent_900, sent_915, sent_930, sent_1000, sent_1015 = False, False, False, False, False
+    sent_2200, sent_2215, sent_2230, sent_800, sent_815 = False, False, False, False, False
     while True:
         now_pk = datetime.utcnow() + timedelta(hours=5)
         current_time_str = now_pk.strftime("%H:%M")
         
-        # Reset flags at midnight
         if current_time_str == "00:00":
-            sent_900, sent_915, sent_930, sent_1000, sent_1015 = False, False, False, False, False
+            sent_2200, sent_2215, sent_2230, sent_800, sent_815 = False, False, False, False, False
             
-        if current_time_str == "21:00" and not sent_900:
+        if current_time_str == "22:00" and not sent_2200:
             send_telegram_simple_message("🌙 **SESSION CLOSE**\nAaj ki trading session mukammal ho chuki hai. Allah Hafiz!")
-            sent_900 = True
-        elif current_time_str == "21:15" and not sent_915:
-            total, wins, losses, acc = get_stats_by_period("day")
+            sent_2200 = True
+        elif current_time_str == "22:15" and not sent_2215:
+            total, d_wins, m_wins, losses, acc = get_stats_by_period("day")
+            t_wins = d_wins + m_wins
             summary_text = (
                 f"📊 **TODAY'S FINAL RESULTS SUMMARY** 📊\n"
                 f"━━━━━━━━━━━━━━━━━━━\n"
                 f"🎯 **Total Signals:** `{total}`\n"
-                f"✅ **Wins:** `{wins}`\n"
+                f"⭐ **Direct Wins (Shureshot):** `{d_wins}`\n"
+                f"✅ **MTG Wins:** `{m_wins}`\n"
+                f"🏆 **Total Wins:** `{t_wins}`\n"
                 f"❌ **Losses:** `{losses}`\n"
                 f"📈 **Accuracy:** `{acc:.2f}%`\n"
                 f"━━━━━━━━━━━━━━━━━━━"
             )
             send_telegram_message_with_result_buttons(summary_text)
-            sent_915 = True
-        elif current_time_str == "21:30" and not sent_930:
+            sent_2215 = True
+        elif current_time_str == "22:30" and not sent_2230:
             send_telegram_simple_message("✨ **GOOD NIGHT!**\nAaj ka din behtareen raha, kal subha phir milte hain. 😴💤")
-            sent_930 = True
-        elif current_time_str == "10:00" and not sent_1000:
+            sent_2230 = True
+        elif current_time_str == "08:00" and not sent_800:
             send_telegram_simple_message("☀️ **GOOD MORNING!**\nSubha bakhair! Sab tayyar ho jayein naye din ki trading ke liye. ☕📈")
-            sent_1000 = True
-        elif current_time_str == "10:15" and not sent_1015:
+            sent_800 = True
+        elif current_time_str == "08:15" and not sent_815:
             send_telegram_simple_message("🚀 **SESSION START!**\nLive trading signals shuru ho rahe hain. Best of luck! 💎")
-            sent_1015 = True
+            sent_815 = True
             
         await asyncio.sleep(30)
 
 async def main():
-    print("Fatima Forex FX Bot Active with Volatility Filter & Time Schedule...")
+    print("Fatima Forex FX Bot Active (Direct Win vs MTG Win Feature Added)...")
     asyncio.create_task(handle_telegram_callbacks())
     asyncio.create_task(time_scheduler())
     
@@ -468,8 +470,7 @@ async def main():
         now_pk = datetime.utcnow() + timedelta(hours=5)
         current_hour = now_pk.hour
         
-        # Subha 10 baje se raat 9 baje tak trading session active rahega
-        if not (10 <= current_hour < 21):
+        if not (8 <= current_hour < 22):
             await asyncio.sleep(60)
             continue
 
@@ -492,7 +493,6 @@ async def main():
             print(f"Scanning Active Session -> {pair}                    ", end="\r")
             candles, trend_1h, is_volatile = get_market_data(yf_symbol)
             
-            # Agar pair volatile ho toh skip kar do
             if is_volatile:
                 print(f"Skipping {pair} due to high volatility.")
                 continue
@@ -502,7 +502,7 @@ async def main():
                 pattern, direction, entry_str, strength, entry_num = signal
                 await process_signal(pair, yf_symbol, pattern, direction, entry_str, strength, entry_num)
                 signal_found = True
-                await asyncio.sleep(300)  # 5 minutes gap between signals
+                await asyncio.sleep(300)
                 break  
                 
         if not signal_found:
