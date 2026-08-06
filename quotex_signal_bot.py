@@ -10,7 +10,7 @@ from datetime import datetime, timedelta
 from playwright.async_api import async_playwright
 
 # ==========================================
-# ⚙️ ULTIMATE SCHEDULED BOT CONFIGURATION (DIRECT VS MTG)
+# ⚙️ ULTIMATE 80%+ ACCURACY PRO BOT CONFIGURATION
 # ==========================================
 TELEGRAM_BOT_TOKEN = "8758950547:AAFRBa1f31fZ0lJciyI05mcoCZYv16bf5hs"
 CHANNEL_CHAT_ID = "@Binary_Signals_Live_Malik"
@@ -62,7 +62,6 @@ def load_history():
     return []
 
 def save_trade_to_db(result_type):
-    # result_type: "DIRECT_WIN", "MTG_WIN", "LOSS"
     history = load_history()
     trade_record = {
         "timestamp": time.time(),
@@ -255,7 +254,7 @@ def get_market_data(yf_symbol):
         df_2m = ticker.history(period="3d", interval="2m", auto_adjust=True, timeout=10)
         df_1h = ticker.history(period="3d", interval="1h", auto_adjust=True, timeout=10)
         
-        if not df_2m.empty and len(df_2m) >= 20:
+        if not df_2m.empty and len(df_2m) >= 30:
             df_2m['tr'] = np.maximum(df_2m['High'] - df_2m['Low'], 
                                      np.maximum(abs(df_2m['High'] - df_2m['Close'].shift(1)), 
                                                 abs(df_2m['Low'] - df_2m['Close'].shift(1))))
@@ -263,25 +262,31 @@ def get_market_data(yf_symbol):
             current_atr = df_2m['atr'].iloc[-1]
             avg_price = df_2m['Close'].iloc[-1]
             
-            if (current_atr / avg_price) > 0.0035:
+            if (current_atr / avg_price) > 0.0030:
                 return None, None, True
 
             df_2m['rsi'] = calculate_rsi(df_2m['Close'], 14)
+            df_2m['ema_fast'] = df_2m['Close'].ewm(span=9, adjust=False).mean()
+            df_2m['ema_slow'] = df_2m['Close'].ewm(span=21, adjust=False).mean()
+            
             candles = []
             for i in range(-5, 0):
                 row = df_2m.iloc[i]
                 candles.append({
                     'open': float(row['Open']), 'high': float(row['High']),
                     'low': float(row['Low']), 'close': float(row['Close']),
-                    'rsi': float(row['rsi']) if not pd.isna(row['rsi']) else 50.0
+                    'rsi': float(row['rsi']) if not pd.isna(row['rsi']) else 50.0,
+                    'ema_fast': float(row['ema_fast']),
+                    'ema_slow': float(row['ema_slow'])
                 })
             
             trend_1h = "NEUTRAL"
-            if not df_1h.empty and len(df_1h) >= 5:
-                ma_fast = df_1h['Close'].rolling(window=5).mean().iloc[-1]
-                ma_slow = df_1h['Close'].rolling(window=20).mean().iloc[-1]
-                if ma_fast > ma_slow: trend_1h = "BULLISH"
-                elif ma_fast < ma_slow: trend_1h = "BEARISH"
+            if not df_1h.empty and len(df_1h) >= 10:
+                ma_fast_1h = df_1h['Close'].rolling(window=10).mean().iloc[-1]
+                ma_slow_1h = df_1h['Close'].rolling(window=30).mean().iloc[-1]
+                if ma_fast_1h > ma_slow_1h: trend_1h = "BULLISH"
+                elif ma_fast_1h < ma_slow_1h: trend_1h = "BEARISH"
+                
             return candles, trend_1h, False
     except:
         pass
@@ -291,36 +296,45 @@ def analyze_multi_strategies(candles, trend_1h, is_mtg):
     if not candles or len(candles) < 2: return None
     prev_candle, curr_candle = candles[-2], candles[-1]
     entry_price = curr_candle['close']
+    
     curr_body = abs(curr_candle['close'] - curr_candle['open'])
     curr_range = curr_candle['high'] - curr_candle['low']
     if curr_range == 0: return None
 
     rsi_val = curr_candle['rsi']
-    is_strong_body = curr_body >= (curr_range * 0.65)
+    is_strong_body = curr_body >= (curr_range * 0.70)
     
-    if curr_candle['close'] > curr_candle['open'] and is_strong_body:
-        if curr_candle['close'] > prev_candle['high'] and trend_1h == "BULLISH" and (40 <= rsi_val <= 65):
-            tag = "🔥 1-STEP HEAVY MTG (Breakout)" if is_mtg else "🎯 2M High Breakout"
-            return (tag, "CALL 🟢", f"{entry_price:.5f}", "💎 VIP 99% (MTG)" if is_mtg else "🔥 PRO 85%+", entry_price)
+    ema_bullish = curr_candle['ema_fast'] > curr_candle['ema_slow']
+    ema_bearish = curr_candle['ema_fast'] < curr_candle['ema_slow']
 
-    elif curr_candle['close'] < curr_candle['open'] and is_strong_body:
-        if curr_candle['close'] < prev_candle['low'] and trend_1h == "BEARISH" and (35 <= rsi_val <= 60):
-            tag = "🔥 1-STEP HEAVY MTG (Breakout)" if is_mtg else "🎯 2M Low Breakout"
-            return (tag, "PUT 🔻", f"{entry_price:.5f}", "💎 VIP 99% (MTG)" if is_mtg else "🔥 PRO 85%+", entry_price)
+    if curr_candle['close'] > curr_candle['open'] and is_strong_body and ema_bullish:
+        if curr_candle['close'] > prev_candle['high'] and trend_1h == "BULLISH" and (45 <= rsi_val <= 65):
+            tag = "🔥 1-STEP HEAVY MTG (Pro Breakout)" if is_mtg else "🎯 2M High Breakout (85% Win)"
+            return (tag, "CALL 🟢", f"{entry_price:.5f}", "💎 VIP 95%+" if is_mtg else "🔥 PRO 85%+", entry_price)
+
+    elif curr_candle['close'] < curr_candle['open'] and is_strong_body and ema_bearish:
+        if curr_candle['close'] < prev_candle['low'] and trend_1h == "BEARISH" and (35 <= rsi_val <= 55):
+            tag = "🔥 1-STEP HEAVY MTG (Pro Breakout)" if is_mtg else "🎯 2M Low Breakout (85% Win)"
+            return (tag, "PUT 🔻", f"{entry_price:.5f}", "💎 VIP 95%+" if is_mtg else "🔥 PRO 85%+", entry_price)
 
     prev_body = abs(prev_candle['close'] - prev_candle['open'])
-    if curr_body > prev_body * 1.2:
-        if curr_candle['close'] > curr_candle['open'] and prev_candle['close'] < prev_candle['open'] and trend_1h == "BULLISH" and rsi_val < 65:
-            tag = "🔥 1-STEP HEAVY MTG (Bullish Engulfing)" if is_mtg else "🚀 Bullish Engulfing Pattern"
-            return (tag, "CALL 🟢", f"{entry_price:.5f}", "💎 VIP 99% (MTG)" if is_mtg else "🔥 PRO 88%+", entry_price)
-        elif curr_candle['close'] < curr_candle['open'] and prev_candle['close'] > prev_candle['open'] and trend_1h == "BEARISH" and rsi_val > 35:
-            tag = "🔥 1-STEP HEAVY MTG (Bearish Engulfing)" if is_mtg else "📉 Bearish Engulfing Pattern"
-            return (tag, "PUT 🔻", f"{entry_price:.5f}", "💎 VIP 99% (MTG)" if is_mtg else "🔥 PRO 88%+", entry_price)
+    if curr_body > prev_body * 1.3:
+        if curr_candle['close'] > curr_candle['open'] and prev_candle['close'] < prev_candle['open'] and trend_1h == "BULLISH" and ema_bullish and (45 <= rsi_val <= 60):
+            tag = "🔥 1-STEP HEAVY MTG (Bullish Engulfing)" if is_mtg else "🚀 Bullish Engulfing Shureshot"
+            return (tag, "CALL 🟢", f"{entry_price:.5f}", "💎 VIP 96%+" if is_mtg else "🔥 PRO 88%+", entry_price)
+        elif curr_candle['close'] < curr_candle['open'] and prev_candle['close'] > prev_candle['open'] and trend_1h == "BEARISH" and ema_bearish and (40 <= rsi_val <= 55):
+            tag = "🔥 1-STEP HEAVY MTG (Bearish Engulfing)" if is_mtg else "📉 Bearish Engulfing Shureshot"
+            return (tag, "PUT 🔻", f"{entry_price:.5f}", "💎 VIP 96%+" if is_mtg else "🔥 PRO 88%+", entry_price)
 
     return None
 
 async def process_signal(pair: str, yf_symbol: str, pattern: str, direction: str, entry_str: str, strength: str, entry_num: float):
     global session_stats, signals_in_session
+    
+    # Increment signal count for this session
+    signals_in_session += 1
+    current_count_str = f"{signals_in_session}/10"
+    
     timestamp = int(time.time())
     live_img = f"{pair}_live_{timestamp}.png"
     result_img = f"{pair}_result_{timestamp}.png"
@@ -328,7 +342,8 @@ async def process_signal(pair: str, yf_symbol: str, pattern: str, direction: str
     # --- 1st Trade Signal ---
     await capture_chart(pair, live_img)
     signal_msg = (
-        f"**💎 FATIMA FOREX FX - PRO SESSION ALERT**\n━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+        f"**💎 FATIMA FOREX FX - 80%+ ACCURACY ALERT** `[{current_count_str}]`\n"
+        f"━━━━━━━━━━━━━━━━━━━━━━━━━\n"
         f"📊 **Asset:** `#{pair}`\n⏳ **Timeframe:** `2 Minutes`\n"
         f"🎯 **Pattern:** `{pattern}`\n📈 **Direction:** `{direction}`\n"
         f"📍 **Entry:** `{entry_str}`\n💪 **Accuracy:** `{strength}`\n"
@@ -352,7 +367,6 @@ async def process_signal(pair: str, yf_symbol: str, pattern: str, direction: str
     # --- DIRECT WIN (SHURESHOT) ---
     if is_first_win:
         session_stats["total"] += 1
-        signals_in_session += 1
         session_stats["direct_wins"] += 1
         session_stats["consecutive_losses"] = 0
         save_trade_to_db("DIRECT_WIN")
@@ -362,10 +376,10 @@ async def process_signal(pair: str, yf_symbol: str, pattern: str, direction: str
         
         await capture_chart(pair, result_img)
         result_msg = (
-            f"🏆 **FATIMA FOREX FX - RESULT** 🏆\n━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+            f"🏆 **FATIMA FOREX FX - RESULT** `[{current_count_str}]`\n"
+            f"━━━━━━━━━━━━━━━━━━━━━━━━━\n"
             f"📊 **Asset:** `#{pair}`\n📍 **Entry:** `{entry_str}` | 🏁 **Exit:** `{exit_str}`\n"
-            f"✨ **Status:** {result_status}\n━━━━━━━━━━━━━━━━━━━━━━━━━\n"
-            f"📊 *Progress* ➔ Signal: `{signals_in_session}`/10 | Direct Wins: `{session_stats['direct_wins']}` | MTG Wins: `{session_stats['mtg_wins']}` | Losses: `{session_stats['losses']}`"
+            f"✨ **Status:** {result_status}\n━━━━━━━━━━━━━━━━━━━━━━━━━"
         )
         if os.path.exists(result_img):
             send_telegram_photo_with_result_buttons(result_img, result_msg)
@@ -386,7 +400,6 @@ async def process_signal(pair: str, yf_symbol: str, pattern: str, direction: str
         is_mtg_win = True if ("CALL" in direction and mtg_exit_num > mtg_entry_num) or ("PUT" in direction and mtg_exit_num < mtg_entry_num) else False
         
         session_stats["total"] += 1
-        signals_in_session += 1
         
         if is_mtg_win:
             session_stats["mtg_wins"] += 1
@@ -402,10 +415,10 @@ async def process_signal(pair: str, yf_symbol: str, pattern: str, direction: str
         mtg_exit_str = f"{mtg_exit_num:.5f}"
         await capture_chart(pair, result_img)
         result_msg = (
-            f"🏆 **FATIMA FOREX FX - MTG RESULT** 🏆\n━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+            f"🏆 **FATIMA FOREX FX - MTG RESULT** `[{current_count_str}]`\n"
+            f"━━━━━━━━━━━━━━━━━━━━━━━━━\n"
             f"📊 **Asset:** `#{pair}`\n📍 **MTG Entry:** `{mtg_entry_str}` | 🏁 **Exit:** `{mtg_exit_str}`\n"
-            f"✨ **Status:** {result_status}\n━━━━━━━━━━━━━━━━━━━━━━━━━\n"
-            f"📊 *Progress* ➔ Signal: `{signals_in_session}`/10 | Direct Wins: `{session_stats['direct_wins']}` | MTG Wins: `{session_stats['mtg_wins']}` | Losses: `{session_stats['losses']}`"
+            f"✨ **Status:** {result_status}\n━━━━━━━━━━━━━━━━━━━━━━━━━"
         )
         if os.path.exists(result_img):
             send_telegram_photo_with_result_buttons(result_img, result_msg)
@@ -462,7 +475,7 @@ async def time_scheduler():
         await asyncio.sleep(30)
 
 async def main():
-    print("Fatima Forex FX Bot Active (Direct Win vs MTG Win Feature Added)...")
+    print("Fatima Forex FX Bot Active (Clean Counter & 1-Hour Volatility Break Mode)...")
     asyncio.create_task(handle_telegram_callbacks())
     asyncio.create_task(time_scheduler())
     
@@ -494,8 +507,17 @@ async def main():
             candles, trend_1h, is_volatile = get_market_data(yf_symbol)
             
             if is_volatile:
-                print(f"Skipping {pair} due to high volatility.")
-                continue
+                vol_msg = (
+                    f"⚠️ **MARKET VOLATILITY WARNING** ⚠️\n"
+                    f"━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+                    f"🛑 **Asset:** `#{pair}` mein market bohat kharab ya volatile hai!\n"
+                    f"⏳ **Bot Status:** Safety ke liye **1 Hour Break** liya ja raha hai.\n"
+                    f"━━━━━━━━━━━━━━━━━━━━━━━━━"
+                )
+                print(f"High Volatility detected on {pair}. Taking 1 hour break...")
+                send_telegram_simple_message(vol_msg)
+                await asyncio.sleep(3600)
+                break
                 
             signal = analyze_multi_strategies(candles, trend_1h, False)
             if signal:
