@@ -230,16 +230,12 @@ async def handle_telegram_callbacks():
 async def capture_chart(pair: str, output_path: str):
     async with async_playwright() as p:
         browser = await p.chromium.launch(headless=True)
-        # Viewport width thori optimize ki hai taake right side par current/last candles bilkul clear aur zoom-in dikhein
         page = await browser.new_page(viewport={"width": 1280, "height": 750})
-        
-        # Updated URL with range and scale parameters to focus clearly on the latest candles
-        url = f"https://s.tradingview.com/widgetembed/?symbol=FX:{pair}&interval=2&hidesidetoolbar=1&symboledit=0&saveimage=0&toolbarbg=ffffff&studies=[]&theme=light&style=1&range=1d"
+        # Wapis Purana Dark Theme set kar diya gaya hai
+        url = f"https://s.tradingview.com/widgetembed/?symbol=FX:{pair}&interval=2&hidesidetoolbar=1&symboledit=0&saveimage=0&toolbarbg=F1F3F6&studies=[]&theme=dark&style=1&range=1d"
         try:
             await page.goto(url, wait_until="networkidle", timeout=30000)
-            await asyncio.sleep(3) # Thora extra wait taake live candles fully load aur render ho jayein
-            
-            # Screenshot area adjust kiya hai taake right side ki live candles cut na hon
+            await asyncio.sleep(3)
             await page.screenshot(path=output_path, clip={"x": 0, "y": 0, "width": 1280, "height": 700})
         except:
             pass
@@ -479,7 +475,7 @@ async def time_scheduler():
         await asyncio.sleep(30)
 
 async def main():
-    print("Fatima Forex FX Bot Active (White Light Theme & Clear Last Candles)...")
+    print("Fatima Forex FX Bot Active (Original Dark Theme & Settings Restored)...")
     asyncio.create_task(handle_telegram_callbacks())
     asyncio.create_task(time_scheduler())
     
