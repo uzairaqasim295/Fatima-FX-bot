@@ -230,12 +230,17 @@ async def handle_telegram_callbacks():
 async def capture_chart(pair: str, output_path: str):
     async with async_playwright() as p:
         browser = await p.chromium.launch(headless=True)
-        page = await browser.new_page(viewport={"width": 1200, "height": 750})
-        url = f"https://s.tradingview.com/widgetembed/?symbol=FX:{pair}&interval=2&hidesidetoolbar=1&symboledit=0&saveimage=0&toolbarbg=F1F3F6&studies=[]&theme=dark&style=1"
+        # Viewport width thori optimize ki hai taake right side par current/last candles bilkul clear aur zoom-in dikhein
+        page = await browser.new_page(viewport={"width": 1280, "height": 750})
+        
+        # Updated URL with range and scale parameters to focus clearly on the latest candles
+        url = f"https://s.tradingview.com/widgetembed/?symbol=FX:{pair}&interval=2&hidesidetoolbar=1&symboledit=0&saveimage=0&toolbarbg=ffffff&studies=[]&theme=light&style=1&range=1d"
         try:
             await page.goto(url, wait_until="networkidle", timeout=30000)
-            await asyncio.sleep(2)
-            await page.screenshot(path=output_path, clip={"x": 0, "y": 0, "width": 1200, "height": 700})
+            await asyncio.sleep(3) # Thora extra wait taake live candles fully load aur render ho jayein
+            
+            # Screenshot area adjust kiya hai taake right side ki live candles cut na hon
+            await page.screenshot(path=output_path, clip={"x": 0, "y": 0, "width": 1280, "height": 700})
         except:
             pass
         finally:
@@ -331,7 +336,6 @@ def analyze_multi_strategies(candles, trend_1h, is_mtg):
 async def process_signal(pair: str, yf_symbol: str, pattern: str, direction: str, entry_str: str, strength: str, entry_num: float):
     global session_stats, signals_in_session
     
-    # Increment signal count for this session
     signals_in_session += 1
     current_count_str = f"{signals_in_session}/10"
     
@@ -475,7 +479,7 @@ async def time_scheduler():
         await asyncio.sleep(30)
 
 async def main():
-    print("Fatima Forex FX Bot Active (Clean Counter & 1-Hour Volatility Break Mode)...")
+    print("Fatima Forex FX Bot Active (White Light Theme & Clear Last Candles)...")
     asyncio.create_task(handle_telegram_callbacks())
     asyncio.create_task(time_scheduler())
     
