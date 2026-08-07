@@ -231,8 +231,8 @@ async def capture_chart(pair: str, output_path: str):
     async with async_playwright() as p:
         browser = await p.chromium.launch(headless=True)
         page = await browser.new_page(viewport={"width": 1280, "height": 750})
-        # interval=1 for 1-Minute Timeframe screenshot with clear dark theme
-        url = f"https://s.tradingview.com/widgetembed/?symbol=FX:{pair}&interval=1&hidesidetoolbar=1&symboledit=0&saveimage=0&toolbarbg=1e222d&studies=[]&theme=dark&style=1&range=1d"
+        # interval=1 (1-Minute Timeframe) & theme=light (Clean Bright Background for clear visibility)
+        url = f"https://s.tradingview.com/widgetembed/?symbol=FX:{pair}&interval=1&hidesidetoolbar=1&symboledit=0&saveimage=0&toolbarbg=F1F3F6&studies=[]&theme=light&style=1&range=1d"
         
         for attempt in range(3):
             try:
@@ -481,7 +481,7 @@ async def time_scheduler():
         await asyncio.sleep(30)
 
 async def main():
-    print("Fatima Forex FX Bot Active (1m Chart Timeframe & Clear Dark Theme)...")
+    print("Fatima Forex FX Bot Active (1m Chart & Clear Light Theme)...")
     asyncio.create_task(handle_telegram_callbacks())
     asyncio.create_task(time_scheduler())
     
