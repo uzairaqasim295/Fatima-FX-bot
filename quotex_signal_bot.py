@@ -231,13 +231,16 @@ async def capture_chart(pair: str, output_path: str):
     async with async_playwright() as p:
         browser = await p.chromium.launch(headless=True)
         page = await browser.new_page(viewport={"width": 1280, "height": 750})
-        # interval=1 (1-Minute Timeframe) & theme=light (Clean Bright Background for clear visibility)
-        url = f"https://s.tradingview.com/widgetembed/?symbol=FX:{pair}&interval=1&hidesidetoolbar=1&symboledit=0&saveimage=0&toolbarbg=F1F3F6&studies=[]&theme=light&style=1&range=1d"
+        
+        # 1-Minute Timeframe + Dark Theme + Bright Contrasted Palette for glowing clear candles
+        url = f"https://s.tradingview.com/widgetembed/?symbol=FX:{pair}&interval=1&hidesidetoolbar=1&symboledit=0&saveimage=0&toolbarbg=090b10&studies=[]&theme=dark&style=1&range=1d"
         
         for attempt in range(3):
             try:
                 await page.goto(url, wait_until="domcontentloaded", timeout=30000)
-                await asyncio.sleep(5)  # Anti-black screenshot delay
+                await asyncio.sleep(5)  # Proper rendering delay
+                
+                # Perfect clipping to remove extra padding and keep the chart full & glowing
                 await page.screenshot(path=output_path, clip={"x": 0, "y": 0, "width": 1280, "height": 700})
                 
                 if os.path.exists(output_path) and os.path.getsize(output_path) > 15000:
@@ -481,7 +484,7 @@ async def time_scheduler():
         await asyncio.sleep(30)
 
 async def main():
-    print("Fatima Forex FX Bot Active (1m Chart & Clear Light Theme)...")
+    print("Fatima Forex FX Bot Active (1m Chart & Glowing Dark Theme)...")
     asyncio.create_task(handle_telegram_callbacks())
     asyncio.create_task(time_scheduler())
     
