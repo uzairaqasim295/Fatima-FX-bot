@@ -231,13 +231,13 @@ async def capture_chart(pair: str, output_path: str):
     async with async_playwright() as p:
         browser = await p.chromium.launch(headless=True)
         page = await browser.new_page(viewport={"width": 1280, "height": 750})
-        # Background ko mazeed clear aur candles ko wazeh karne ke liye style aur theme parameters optimize kiye hain
-        url = f"https://s.tradingview.com/widgetembed/?symbol=FX:{pair}&interval=2&hidesidetoolbar=1&symboledit=0&saveimage=0&toolbarbg=1e222d&studies=[]&theme=dark&style=1&range=1d"
+        # interval=1 for 1-Minute Timeframe screenshot with clear dark theme
+        url = f"https://s.tradingview.com/widgetembed/?symbol=FX:{pair}&interval=1&hidesidetoolbar=1&symboledit=0&saveimage=0&toolbarbg=1e222d&studies=[]&theme=dark&style=1&range=1d"
         
         for attempt in range(3):
             try:
                 await page.goto(url, wait_until="domcontentloaded", timeout=30000)
-                await asyncio.sleep(5)  # Proper delay taake candles aur colors fully load ho kar sharp dikhein
+                await asyncio.sleep(5)  # Anti-black screenshot delay
                 await page.screenshot(path=output_path, clip={"x": 0, "y": 0, "width": 1280, "height": 700})
                 
                 if os.path.exists(output_path) and os.path.getsize(output_path) > 15000:
@@ -350,7 +350,7 @@ async def process_signal(pair: str, yf_symbol: str, pattern: str, direction: str
     signal_msg = (
         f"**💎 FATIMA FOREX FX - 80%+ ACCURACY ALERT** `[{current_count_str}]`\n"
         f"━━━━━━━━━━━━━━━━━━━━━━━━━\n"
-        f"📊 **Asset:** `#{pair}`\n⏳ **Timeframe:** `2 Minutes`\n"
+        f"📊 **Asset:** `#{pair}`\n⏳ **Timeframe:** `1 Minute (Chart) / 2 Min (Expiry)`\n"
         f"🎯 **Pattern:** `{pattern}`\n📈 **Direction:** `{direction}`\n"
         f"📍 **Entry:** `{entry_str}`\n💪 **Accuracy:** `{strength}`\n"
         f"⏱️ **Expiry:** `Exact 2 Minutes`\n"
@@ -481,7 +481,7 @@ async def time_scheduler():
         await asyncio.sleep(30)
 
 async def main():
-    print("Fatima Forex FX Bot Active (Crystal Clear Dark Theme & 2m Chart)...")
+    print("Fatima Forex FX Bot Active (1m Chart Timeframe & Clear Dark Theme)...")
     asyncio.create_task(handle_telegram_callbacks())
     asyncio.create_task(time_scheduler())
     
