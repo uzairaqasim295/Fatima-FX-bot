@@ -231,16 +231,22 @@ async def capture_chart(pair: str, output_path: str):
     async with async_playwright() as p:
         browser = await p.chromium.launch(headless=True)
         page = await browser.new_page(viewport={"width": 1280, "height": 750})
-        # Wapis Purana Dark Theme set kar diya gaya hai
-        url = f"https://s.tradingview.com/widgetembed/?symbol=FX:{pair}&interval=2&hidesidetoolbar=1&symboledit=0&saveimage=0&toolbarbg=F1F3F6&studies=[]&theme=dark&style=1&range=1d"
-        try:
-            await page.goto(url, wait_until="networkidle", timeout=30000)
-            await asyncio.sleep(3)
-            await page.screenshot(path=output_path, clip={"x": 0, "y": 0, "width": 1280, "height": 700})
-        except:
-            pass
-        finally:
-            await browser.close()
+        # interval=1 for 1-Minute Timeframe screenshot
+        url = f"https://s.tradingview.com/widgetembed/?symbol=FX:{pair}&interval=1&hidesidetoolbar=1&symboledit=0&saveimage=0&toolbarbg=F1F3F6&studies=[]&theme=dark&style=1&range=1d"
+        
+        for attempt in range(3):
+            try:
+                await page.goto(url, wait_until="domcontentloaded", timeout=30000)
+                await asyncio.sleep(5)  # Anti-black screenshot delay
+                await page.screenshot(path=output_path, clip={"x": 0, "y": 0, "width": 1280, "height": 700})
+                
+                if os.path.exists(output_path) and os.path.getsize(output_path) > 15000:
+                    break
+            except Exception as e:
+                print(f"Chart capture attempt {attempt+1} failed: {e}")
+                await asyncio.sleep(2)
+        
+        await browser.close()
 
 def calculate_rsi(series, period=14):
     delta = series.diff()
@@ -344,7 +350,7 @@ async def process_signal(pair: str, yf_symbol: str, pattern: str, direction: str
     signal_msg = (
         f"**💎 FATIMA FOREX FX - 80%+ ACCURACY ALERT** `[{current_count_str}]`\n"
         f"━━━━━━━━━━━━━━━━━━━━━━━━━\n"
-        f"📊 **Asset:** `#{pair}`\n⏳ **Timeframe:** `2 Minutes`\n"
+        f"📊 **Asset:** `#{pair}`\n⏳ **Timeframe:** `1 Minute (Chart) / 2 Min (Expiry)`\n"
         f"🎯 **Pattern:** `{pattern}`\n📈 **Direction:** `{direction}`\n"
         f"📍 **Entry:** `{entry_str}`\n💪 **Accuracy:** `{strength}`\n"
         f"⏱️ **Expiry:** `Exact 2 Minutes`\n"
@@ -475,7 +481,7 @@ async def time_scheduler():
         await asyncio.sleep(30)
 
 async def main():
-    print("Fatima Forex FX Bot Active (Original Dark Theme & Settings Restored)...")
+    print("Fatima Forex FX Bot Active (1m Chart Timeframe & Dark Theme)...")
     asyncio.create_task(handle_telegram_callbacks())
     asyncio.create_task(time_scheduler())
     
